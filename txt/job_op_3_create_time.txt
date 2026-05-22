@@ -1,0 +1,254 @@
+('pi_person_id',) 2560.35315990448
+('ci_movie_id', 'ci_person_role_id') 22243.768095970154
+('mc_company_type_id', 'mc_movie_id', 'mc_company_id') 1667.9686307907104
+('mk_movie_id', 'mk_keyword_id') 2172.1271276474
+('mc_movie_id', 'mc_company_type_id', 'mc_note') 1492.3856258392334
+('mc_note', 'mc_movie_id') 3363.0270957946777
+('mc_company_id', 'mc_movie_id', 'mc_note') 1801.6197681427002
+('mi_note', 'mi_info_type_id', 'mi_movie_id') 19971.09603881836
+('ci_person_role_id', 'ci_role_id') 18768.794894218445
+('mc_company_type_id', 'mc_company_id', 'mc_movie_id') 1693.9117908477783
+('ci_role_id', 'ci_person_id', 'ci_person_role_id') 22358.94811153412
+('ci_role_id', 'ci_person_id', 'ci_movie_id') 21191.672801971436
+('mc_note', 'mc_movie_id', 'mc_company_type_id') 4596.230745315552
+('mc_note', 'mc_company_type_id', 'mc_movie_id') 4135.262966156006
+('ci_movie_id', 'ci_person_role_id', 'ci_role_id') 23222.25308418274
+('mc_movie_id', 'mc_company_type_id') 988.5234832763672
+('ci_note',) 25857.301712036133
+('t_production_year', 't_title', 't_kind_id') 5801.136612892151
+('mc_company_id', 'mc_movie_id') 1378.421425819397
+('cc_subject_id',) 48.230767250061035
+('mc_movie_id',) 966.4912223815918
+('ci_movie_id',) 18349.39181804657
+('cc_movie_id',) 86.00759506225586
+('cc_movie_id', 'cc_status_id') 82.11207389831543
+('ci_person_id', 'ci_person_role_id', 'ci_note') 26285.905838012695
+('ci_note', 'ci_person_id', 'ci_movie_id') 300000
+('t_kind_id',) 1367.138385772705
+('mi_movie_id', 'mi_info_type_id') 8909.603595733643
+('ci_role_id', 'ci_person_role_id') 18548.40636253357
+('n_name_pcode_cf', 'n_name') 10044.9458360672
+('cc_status_id',) 85.4865312576294
+('mc_note', 'mc_company_id', 'mc_company_type_id') 3885.8234882354736
+('ci_person_id', 'ci_movie_id') 16609.68852043152
+('ci_person_id', 'ci_person_role_id', 'ci_role_id') 21861.621260643005
+('mc_movie_id', 'mc_note', 'mc_company_id') 1648.3136415481567
+('mi_movie_id', 'mi_info_type_id', 'mi_note') 7915.108561515808
+('t_kind_id', 't_title') 6281.73828125
+('pi_info_type_id', 'pi_note', 'pi_person_id') 3681.983232498169
+('mc_company_type_id', 'mc_note', 'mc_company_id') 3576.7650604248047
+('ci_movie_id', 'ci_person_role_id', 'ci_person_id') 21495.64564228058
+('mc_company_id', 'mc_note', 'mc_movie_id') 3070.276618003845
+('ci_movie_id', 'ci_person_role_id', 'ci_note') 27595.89636325836
+('mii_info_type_id',) 722.0638990402222
+('mc_note',) 2615.7888174057007
+('an_name',) 1642.6711082458496
+('mii_info_type_id', 'mii_info') 2563.7683868408203
+('ci_person_role_id',) 15141.825437545776
+('mi_info_type_id',) 5943.503379821777
+('n_gender',) 1960.9274864196777
+('mi_info_type_id', 'mi_movie_id', 'mi_note') 10013.041377067566
+('k_keyword',) 316.92302227020264
+('ci_person_role_id', 'ci_person_id', 'ci_movie_id') 28205.373644828796
+('mk_keyword_id',) 2777.3690223693848
+('ci_person_id',) 17201.86734199524
+('n_name', 'n_gender') 7788.158059120178
+('ci_role_id', 'ci_note', 'ci_movie_id') 300000
+('ci_person_id', 'ci_movie_id', 'ci_person_role_id') 19176.668167114258
+('pi_info_type_id', 'pi_person_id', 'pi_note') 2212.4478816986084
+('at_movie_id',) 274.9347686767578
+('rt_role',) 5.145072937011719
+('t_episode_nr',) 1109.2071533203125
+('ci_movie_id', 'ci_note', 'ci_role_id') 28057.762503623962
+('ml_linked_movie_id', 'ml_movie_id') 29.395103454589844
+((mi_info_type_id, mi_info, mi_movie_id)) 300000
+('ml_linked_movie_id',) 21.67356014251709
+('ci_movie_id', 'ci_person_id') 18206.971168518066
+('mi_note', 'mi_movie_id') 13146.045446395874
+('ci_movie_id', 'ci_note') 24746.08850479126
+('ci_movie_id', 'ci_person_id', 'ci_person_role_id') 23301.26976966858
+('mc_company_type_id', 'mc_movie_id', 'mc_note') 2042.1996116638184
+('mii_info', 'mii_movie_id') 2608.0620288848877
+('cct_kind',) 4.346489906311035
+('ml_link_type_id', 'ml_movie_id') 16.00348949432373
+('cn_name',) 421.3402271270752
+('pi_info_type_id', 'pi_note') 1830.3502798080444
+('ci_movie_id', 'ci_role_id') 19392.397165298462
+('t_production_year', 't_title') 4004.823327064514
+('chn_name',) 9176.695227622986
+('ci_movie_id', 'ci_person_id', 'ci_note') 23713.600993156433
+('mi_movie_id',) 6574.838161468506
+('ci_role_id', 'ci_movie_id') 22762.68458366394
+('mc_note', 'mc_company_id') 3554.5045137405396
+('cc_status_id', 'cc_subject_id', 'cc_movie_id') 85.36064624786377
+('mii_info_type_id', 'mii_info', 'mii_movie_id') 2858.7965965270996
+('pi_note', 'pi_person_id') 2349.9088287353516
+('mc_company_id', 'mc_note', 'mc_company_type_id') 2481.862187385559
+('mc_movie_id', 'mc_note') 1890.0889158248901
+('ci_note', 'ci_movie_id', 'ci_person_role_id') 300000
+('ci_movie_id', 'ci_person_id', 'ci_role_id') 21363.158226013184
+('mc_company_type_id', 'mc_note', 'mc_movie_id') 4792.699098587036
+('cc_subject_id', 'cc_movie_id') 84.10942554473877
+('ci_note', 'ci_person_role_id') 300000
+('ci_note', 'ci_movie_id', 'ci_person_id') 300000
+('mc_company_type_id', 'mc_movie_id') 1406.2530994415283
+('t_title', 't_production_year', 't_kind_id') 6660.776257514954
+('n_name_pcode_cf',) 3837.208390235901
+('n_name_pcode_cf', 'n_gender') 4346.695780754089
+('cc_subject_id', 'cc_status_id') 70.27840614318848
+('cc_movie_id', 'cc_status_id', 'cc_subject_id') 56.89108371734619
+('pi_note', 'pi_info_type_id', 'pi_person_id') 4538.01417350769
+('mii_info', 'mii_info_type_id', 'mii_movie_id') 4084.4922065734863
+('ci_note', 'ci_person_id') 300000
+('ci_role_id', 'ci_person_role_id', 'ci_person_id') 300000
+('t_episode_nr', 't_title') 4922.374725341797
+('ci_role_id', 'ci_person_role_id', 'ci_note') 300000
+('n_name', 'n_name_pcode_cf') 8137.843608856201
+('pi_note',) 1606.6431999206543
+('t_production_year', 't_kind_id', 't_title') 4489.969968795776
+('ci_note', 'ci_movie_id', 'ci_role_id') 300000
+('mc_company_id', 'mc_company_type_id', 'mc_note') 2298.154592514038
+('kt_kind',) 0.9344816207885742
+('an_person_id',) 321.3841915130615
+('t_kind_id', 't_production_year') 1507.6898336410522
+('cc_subject_id', 'cc_movie_id', 'cc_status_id') 70.47271728515625
+('ml_linked_movie_id', 'ml_link_type_id', 'ml_movie_id') 17.445802688598633
+('ci_note', 'ci_role_id') 300000
+('pi_person_id', 'pi_note') 1575.4317045211792
+('ml_movie_id', 'ml_link_type_id', 'ml_linked_movie_id') 14.723658561706543
+('ci_role_id', 'ci_person_id') 19828.486442565918
+('ci_role_id', 'ci_person_id', 'ci_note') 26537.62686252594
+('mc_note', 'mc_movie_id', 'mc_company_id') 4409.110903739929
+('ci_role_id', 'ci_note') 300000
+('mi_note', 'mi_info_type_id') 12614.822030067444
+('mc_movie_id', 'mc_company_id', 'mc_company_type_id') 1181.0342073440552
+('n_name_pcode_cf', 'n_gender', 'n_name') 7497.196674346924
+('ci_person_role_id', 'ci_movie_id', 'ci_person_id') 300000
+('ci_person_role_id', 'ci_movie_id', 'ci_note') 300000
+('mc_company_type_id', 'mc_company_id') 1340.893030166626
+('mi_note', 'mi_movie_id', 'mi_info_type_id') 14516.81673526764
+('ci_note', 'ci_role_id', 'ci_person_role_id') 300000
+('cc_subject_id', 'cc_status_id', 'cc_movie_id') 113.58869075775146
+('t_kind_id', 't_production_year', 't_title') 4458.456993103027
+('n_gender', 'n_name_pcode_cf', 'n_name') 8642.152786254883
+('mc_movie_id', 'mc_note', 'mc_company_type_id') 1874.0732669830322
+('ci_person_role_id', 'ci_movie_id', 'ci_role_id') 27207.560181617737
+('n_gender', 'n_name') 7848.868370056152
+('ci_note', 'ci_role_id', 'ci_person_id') 300000
+('it_info',) 1.2947320938110352
+('mc_note', 'mc_company_type_id', 'mc_company_id') 3574.645519256592
+('ml_linked_movie_id', 'ml_link_type_id') 14.542222023010254
+('t_title',) 4615.991830825806
+('mii_info', 'mii_info_type_id') 2529.849410057068
+('lt_link',) 1.2679100036621094
+('t_title', 't_production_year') 4485.8832359313965
+('ci_role_id',) 12841.2367105484
+('mk_keyword_id', 'mk_movie_id') 2302.7878999710083
+('mii_info_type_id', 'mii_movie_id', 'mii_info') 788.5520458221436
+('ci_note', 'ci_movie_id') 300000
+('ci_role_id', 'ci_person_role_id', 'ci_movie_id') 300000
+('cc_status_id', 'cc_movie_id', 'cc_subject_id') 76.58970355987549
+('ml_movie_id', 'ml_link_type_id') 12.593626976013184
+('ci_person_id', 'ci_movie_id', 'ci_note') 21044.861674308777
+('ml_movie_id',) 11.879444122314453
+('mi_note',) 7752.148151397705
+('mii_movie_id', 'mii_info_type_id', 'mii_info') 841.5395021438599
+('ci_person_role_id', 'ci_note', 'ci_person_id') 300000
+('mc_company_id', 'mc_movie_id', 'mc_company_type_id') 1757.2954893112183
+('cc_movie_id', 'cc_subject_id') 84.06686782836914
+('ci_person_id', 'ci_movie_id', 'ci_role_id') 18666.412711143494
+('ci_person_role_id', 'ci_role_id', 'ci_person_id') 300000
+('ci_person_role_id', 'ci_note', 'ci_role_id') 300000
+('ci_person_role_id', 'ci_role_id', 'ci_note') 300000
+('ci_person_role_id', 'ci_person_id') 23804.040908813477
+('t_kind_id', 't_title', 't_production_year') 5027.569890022278
+('ci_person_role_id', 'ci_note') 300000
+('pi_info_type_id', 'pi_person_id') 1993.7852621078491
+('mk_movie_id',) 1699.5201110839844
+('mii_movie_id', 'mii_info', 'mii_info_type_id') 723.3299016952515
+('mi_info_type_id', 'mi_note') 7815.093517303467
+('mc_company_id', 'mc_company_type_id') 1311.3425970077515
+('mii_movie_id', 'mii_info') 748.0636835098267
+('pi_person_id', 'pi_info_type_id', 'pi_note') 1979.7800779342651
+('n_name', 'n_gender', 'n_name_pcode_cf') 8843.298077583313
+('pi_note', 'pi_info_type_id') 2508.5278749465942
+('ci_person_id', 'ci_note', 'ci_person_role_id') 23201.993346214294
+('cc_movie_id', 'cc_subject_id', 'cc_status_id') 73.24278354644775
+('mc_movie_id', 'mc_company_id', 'mc_note') 1441.941738128662
+('an_name', 'an_person_id') 1517.4596309661865
+('ml_movie_id', 'ml_linked_movie_id', 'ml_link_type_id') 13.52238655090332
+('mc_note', 'mc_company_type_id') 3950.8578777313232
+('mi_movie_id', 'mi_note', 'mi_info_type_id') 9232.575297355652
+('ci_person_id', 'ci_role_id', 'ci_person_role_id') 19093.196272850037
+('mc_company_type_id', 'mc_company_id', 'mc_note') 3444.12362575531
+('ci_note', 'ci_role_id', 'ci_movie_id') 300000
+('t_title', 't_kind_id') 6093.917608261108
+('cn_name', 'cn_country_code') 398.86486530303955
+('pi_person_id', 'pi_note', 'pi_info_type_id') 1607.7117919921875
+('ml_linked_movie_id', 'ml_movie_id', 'ml_link_type_id') 16.96944236755371
+('n_name_pcode_cf', 'n_name', 'n_gender') 7974.3452072143555
+('t_production_year', 't_kind_id') 1630.306601524353
+('ci_movie_id', 'ci_note', 'ci_person_role_id') 27786.620378494263
+('ci_note', 'ci_person_role_id', 'ci_person_id') 300000
+('ci_person_id', 'ci_note', 'ci_role_id') 25837.856650352478
+('ci_note', 'ci_person_id', 'ci_person_role_id') 300000
+('mc_company_id',) 1504.3673515319824
+('ci_person_id', 'ci_role_id', 'ci_note') 23113.245368003845
+('an_person_id', 'an_name') 710.8514308929443
+('n_name', 'n_name_pcode_cf', 'n_gender') 8215.0559425354
+('pi_info_type_id',) 1483.6684465408325
+('ci_movie_id', 'ci_note', 'ci_person_id') 26247.297525405884
+('mii_movie_id',) 665.6785011291504
+('ci_person_id', 'ci_person_role_id') 17654.739379882812
+('ci_note', 'ci_person_role_id', 'ci_role_id') 300000
+('mc_company_type_id', 'mc_note') 2818.889856338501
+('ci_person_role_id', 'ci_note', 'ci_movie_id') 300000
+('pi_person_id', 'pi_info_type_id') 1281.6128730773926
+('ci_person_id', 'ci_note') 20395.188331604004
+('t_title', 't_kind_id', 't_production_year') 5032.938599586487
+('mc_company_type_id',) 848.3849763870239
+('mc_note', 'mc_company_id', 'mc_movie_id') 3589.0551805496216
+('n_name',) 9213.521480560303
+('mii_info', 'mii_movie_id', 'mii_info_type_id') 2425.578236579895
+('mii_movie_id', 'mii_info_type_id') 471.3400602340698
+('mi_movie_id', 'mi_note') 7076.143741607666
+('pi_note', 'pi_person_id', 'pi_info_type_id') 2455.5476903915405
+('t_production_year',) 1763.4893655776978
+('ci_person_role_id', 'ci_role_id', 'ci_movie_id') 300000
+('ci_person_id', 'ci_person_role_id', 'ci_movie_id') 20589.580059051514
+('ci_person_role_id', 'ci_movie_id') 25751.758217811584
+('ci_person_id', 'ci_role_id') 17841.928243637085
+('ml_link_type_id', 'ml_linked_movie_id') 16.85512065887451
+('mc_movie_id', 'mc_company_type_id', 'mc_company_id') 1208.4168195724487
+('ct_kind',) 2.215266227722168
+('ml_movie_id', 'ml_linked_movie_id') 13.047575950622559
+('ml_link_type_id', 'ml_movie_id', 'ml_linked_movie_id') 16.16370677947998
+('ci_role_id', 'ci_movie_id', 'ci_person_role_id') 300000
+('cn_country_code',) 166.43774509429932
+('mc_company_id', 'mc_company_type_id', 'mc_movie_id') 1461.145520210266
+('t_title', 't_episode_nr') 5493.2074546813965
+('mi_info_type_id', 'mi_note', 'mi_movie_id') 14236.544489860535
+('ml_link_type_id',) 13.525962829589844
+('mii_info',) 2063.088893890381
+('ci_role_id', 'ci_note', 'ci_person_role_id') 300000
+('ci_role_id', 'ci_movie_id', 'ci_person_id') 23761.083602905273
+('ci_role_id', 'ci_movie_id', 'ci_note') 300000
+('mc_company_id', 'mc_note') 1964.669108390808
+('cn_country_code', 'cn_name') 453.0092477798462
+('ci_person_role_id', 'ci_person_id', 'ci_note') 29440.144300460815
+('ci_movie_id', 'ci_role_id', 'ci_person_role_id') 23570.513486862183
+('ci_person_id', 'ci_note', 'ci_movie_id') 25013.24427127838
+('cc_status_id', 'cc_subject_id') 105.90541362762451
+('ci_role_id', 'ci_note', 'ci_person_id') 300000
+('cc_status_id', 'cc_movie_id') 92.49162673950195
+('n_gender', 'n_name', 'n_name_pcode_cf') 9763.150453567505
+('mc_movie_id', 'mc_company_id') 951.7230987548828
+('ci_movie_id', 'ci_role_id', 'ci_person_id') 21304.086208343506
+('ci_person_role_id', 'ci_person_id', 'ci_role_id') 25854.43389415741
+('ci_movie_id', 'ci_role_id', 'ci_note') 25764.48953151703
+('ci_note', 'ci_person_role_id', 'ci_movie_id') 300000
+('mi_info_type_id', 'mi_movie_id') 7204.77557182312
+('ci_person_id', 'ci_role_id', 'ci_movie_id') 19071.96795940399
+('ml_link_type_id', 'ml_linked_movie_id', 'ml_movie_id') 26.583194732666016
+('mii_info_type_id', 'mii_movie_id') 833.9676856994629
+('n_gender', 'n_name_pcode_cf') 6850.328803062439

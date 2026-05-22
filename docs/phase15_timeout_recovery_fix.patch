@@ -1,0 +1,689 @@
+diff --git a/adasel/ada_select.py b/adasel/ada_select.py
+index fa3397b..b0a2267 100644
+--- a/adasel/ada_select.py
++++ b/adasel/ada_select.py
+@@ -91,6 +91,17 @@ class AdaSelect:
+         self.beta = 1.10
+         self.ratio = 0.5
+         self.timeout = 30_000
++        # Timeout recovery is handled as a recommendation-side replan signal,
++        # not as an immediate rollback to an old workload phase.
++        self.timeout_policy = "replan"
++        self.timeout_reset_after = 2
++        self.timeout_shift_similarity_threshold = 0.35
++        self.timeout_force_full_budget = True
++        self.timeout_retain_penalty = 0.75
++        self.timeout_disable_keep_bonus = True
++        self.timeout_delta_scale = 0.50
++        self.timeout_drop_unsupported_old = True
++        self.timeout_drop_floor = 0.50
+         self.min_width = 1
+         self.max_width = 2
+         self.workload_count = 0  # 用于追踪轮次，处理冷启动
+@@ -359,7 +370,12 @@ class AdaSelect:
+         #   - regression: system used to be stable but becomes unstable
+         # Values: "normal" | "cold_start" | "regression"
+         self._timeout_state: str = "normal"
+-        self._timeout_state = "normal"
++        self._timeout_recovery_action: str = ""
++        self._timeout_workload_similarity: Optional[float] = None
++        self._timeout_bad_old_conf: Set[IndexKey] = set()
++        self._timeout_force_full_budget_once: bool = False
++        self._last_stable_workload_sig: Set[str] = set()
++        self._prev_workload_sig: Set[str] = set()
+ 
+     def _reset_round_diagnostics(self) -> None:
+         """Reset per-round diagnostic caches used by metrics/trace logging."""
+@@ -445,6 +461,18 @@ class AdaSelect:
+             self.ratio = float(ratio)
+ 
+             self.timeout = int(cfg.get("timeout", getattr(self, "timeout", 30000)))
++            # Timeout recovery knobs. Default policy is current-workload replan;
++            # rollback is intentionally not the mainline because it can return to
++            # the previous workload phase and cause repeated timeouts.
++            self.timeout_policy = str(cfg.get("timeout_policy", getattr(self, "timeout_policy", "replan"))).lower()
++            self.timeout_reset_after = int(cfg.get("timeout_reset_after", getattr(self, "timeout_reset_after", 2)))
++            self.timeout_shift_similarity_threshold = float(cfg.get("timeout_shift_similarity_threshold", getattr(self, "timeout_shift_similarity_threshold", 0.35)))
++            self.timeout_force_full_budget = bool(cfg.get("timeout_force_full_budget", getattr(self, "timeout_force_full_budget", True)))
++            self.timeout_retain_penalty = float(cfg.get("timeout_retain_penalty", getattr(self, "timeout_retain_penalty", 0.75)))
++            self.timeout_disable_keep_bonus = bool(cfg.get("timeout_disable_keep_bonus", getattr(self, "timeout_disable_keep_bonus", True)))
++            self.timeout_delta_scale = float(cfg.get("timeout_delta_scale", getattr(self, "timeout_delta_scale", 0.50)))
++            self.timeout_drop_unsupported_old = bool(cfg.get("timeout_drop_unsupported_old", getattr(self, "timeout_drop_unsupported_old", True)))
++            self.timeout_drop_floor = float(cfg.get("timeout_drop_floor", getattr(self, "timeout_drop_floor", 0.50)))
+             self.rsfe_decay = float(cfg.get("rsfe_decay", getattr(self, "rsfe_decay", 0.9)))
+ 
+             self.min_width = int(cfg.get("min_width", self.min_width))
+@@ -1363,7 +1391,8 @@ class AdaSelect:
+         # -------------------------------------------------------------
+         # Budget should scale with the pre-topk current structured universe (curr_union),
+         # then be capped by the number of visible current candidates (appearing_curr).
+-        if self.workload_count == 0:
++        timeout_full_budget = bool(getattr(self, "_timeout_force_full_budget_once", False))
++        if self.workload_count == 0 or timeout_full_budget:
+             budget = len(appearing_curr)
+         else:
+             budget = (
+@@ -1377,6 +1406,7 @@ class AdaSelect:
+         try:
+             if isinstance(getattr(self, "_last_wdcg_stats", None), dict):
+                 self._last_wdcg_stats["budget_curr"] = int(budget)
++                self._last_wdcg_stats["timeout_full_budget"] = int(1 if timeout_full_budget else 0)
+         except Exception:
+             pass
+ 
+@@ -1628,6 +1658,11 @@ class AdaSelect:
+                 "ratio": float("-inf"),
+                 "beta": float(getattr(self, "beta", 0.0)),
+                 "delta_swap": float(getattr(self, "retain_swap_delta", 0.05)),
++                "timeout_state": str(getattr(self, "_timeout_state", "normal")),
++                "timeout_recovery_action": str(getattr(self, "_timeout_recovery_action", "")),
++                "timeout_workload_similarity": getattr(self, "_timeout_workload_similarity", None),
++                "timeout_bad_old_count": int(len(getattr(self, "_timeout_bad_old_conf", set()) or set())),
++                "timeout_drop_count": 0,
+                 "visible_curr": float(len(appearing_curr)),
+                 "visible_keep": float(len(keep_visible)),
+                 "visible_old_conf": float(len(old_canon)),
+@@ -1652,7 +1687,17 @@ class AdaSelect:
+         risk_raw = {k: abs(float((getattr(self, "idx_abs_error_smooth", {}) or {}).get(k, 0.0) or 0.0)) for k in visible_keys}
+         risk_norm = self._normalize_positive_map(risk_raw, visible_keys)
+ 
+-        delta_swap = float(getattr(self, "retain_swap_delta", 0.05))
++        timeout_state = str(getattr(self, "_timeout_state", "normal") or "normal")
++        timeout_active = timeout_state != "normal"
++        timeout_bad_old: Set[IndexKey] = set(getattr(self, "_timeout_bad_old_conf", set()) or set())
++        timeout_retain_penalty_w = float(getattr(self, "timeout_retain_penalty", 0.75)) if timeout_active else 0.0
++        timeout_disable_keep_bonus = bool(getattr(self, "timeout_disable_keep_bonus", True)) and timeout_active
++        timeout_delta_scale = float(getattr(self, "timeout_delta_scale", 0.50)) if timeout_active else 1.0
++        timeout_delta_scale = max(0.0, min(1.0, timeout_delta_scale))
++        timeout_drop_unsupported_old = bool(getattr(self, "timeout_drop_unsupported_old", True)) and timeout_active
++        timeout_drop_floor = float(getattr(self, "timeout_drop_floor", 0.50))
++
++        delta_swap = float(getattr(self, "retain_swap_delta", 0.05)) * timeout_delta_scale
+         admit_floor = float(getattr(self, "retain_swap_admit_floor", 0.0))
+         keep_bonus_w = float(getattr(self, "retain_swap_keep_bonus", 0.20))
+         curr_bonus_w = float(getattr(self, "retain_swap_curr_bonus", 0.15))
+@@ -1676,9 +1721,12 @@ class AdaSelect:
+                     + support_w * float(support_norm.get(key, 0.0))
+                 )
+             keep_bonus = keep_bonus_w if key in keep_visible else 0.0
++            if timeout_disable_keep_bonus and key in timeout_bad_old:
++                keep_bonus = 0.0
+             stale_penalty = stale_w * self._retainswap_stale_score(key)
+             risk_penalty = risk_w * float(risk_norm.get(key, 0.0))
+             maintenance_penalty = maintenance_w * float(self._creation_cost(key))
++            timeout_penalty = timeout_retain_penalty_w if key in timeout_bad_old else 0.0
+             retention_scores[key] = (
+                 float(benefit_norm.get(key, 0.0))
+                 + keep_bonus
+@@ -1686,6 +1734,7 @@ class AdaSelect:
+                 - stale_penalty
+                 - risk_penalty
+                 - maintenance_penalty
++                - timeout_penalty
+             )
+ 
+         newcomers: Set[IndexKey] = set(appearing_curr).difference(old_canon)
+@@ -1715,6 +1764,7 @@ class AdaSelect:
+         swap_decisions: List[Dict[str, Any]] = []
+         blocked_swaps: List[Dict[str, Any]] = []
+         capacity_drops: List[Dict[str, Any]] = []
++        timeout_drops: List[Dict[str, Any]] = []
+ 
+         def _stable_key(idx: IndexKey) -> Tuple[str, Tuple[str, ...]]:
+             return (idx[0], tuple(idx[1]))
+@@ -1737,6 +1787,30 @@ class AdaSelect:
+                     }
+                 )
+ 
++        # On timeout recovery, an old incumbent that has no current structural
++        # support and just caused an execution timeout should not be protected
++        # merely because it had high benefit in a previous workload phase. Drop
++        # such weak unsupported incumbents before admitting newcomers so the
++        # next configuration can actually move away from the failing phase.
++        if timeout_drop_unsupported_old:
++            timeout_drop_candidates = sorted(
++                [k for k in candidate_conf if k in timeout_bad_old and k not in appearing_curr],
++                key=lambda k: (retention_scores.get(k, float("-inf")), _stable_key(k)),
++            )
++            for old_key in timeout_drop_candidates:
++                score = float(retention_scores.get(old_key, 0.0))
++                if score > timeout_drop_floor:
++                    continue
++                candidate_conf.remove(old_key)
++                timeout_drops.append(
++                    {
++                        "old": old_key,
++                        "old_score": score,
++                        "drop_floor": float(timeout_drop_floor),
++                        "reason": "timeout_unsupported_old",
++                    }
++                )
++
+         newcomer_order = sorted(
+             newcomers,
+             key=lambda k: (-float(admission_scores.get(k, float("-inf"))), _stable_key(k)),
+@@ -1893,7 +1967,15 @@ class AdaSelect:
+             "ratio": float(ratio),
+             "beta": float(getattr(self, "beta", 0.0)),
+             "delta_swap": float(delta_swap),
++            "base_delta_swap": float(getattr(self, "retain_swap_delta", 0.05)),
+             "admit_floor": float(admit_floor),
++            "timeout_state": timeout_state,
++            "timeout_recovery_action": str(getattr(self, "_timeout_recovery_action", "")),
++            "timeout_workload_similarity": getattr(self, "_timeout_workload_similarity", None),
++            "timeout_bad_old_count": int(len(timeout_bad_old)),
++            "timeout_retain_penalty": float(timeout_retain_penalty_w),
++            "timeout_drop_floor": float(timeout_drop_floor),
++            "timeout_drop_count": int(len(timeout_drops)),
+             "visible_curr": float(len(appearing_curr)),
+             "visible_keep": float(len(keep_visible)),
+             "visible_old_conf": float(len(old_canon)),
+@@ -1912,6 +1994,7 @@ class AdaSelect:
+             "swap_decisions": swap_decisions,
+             "blocked_swaps": blocked_swaps,
+             "capacity_drops": capacity_drops,
++            "timeout_drops": timeout_drops,
+             "visible_action_set": sorted(visible_keys),
+         }
+ 
+@@ -2113,110 +2196,150 @@ class AdaSelect:
+         self.installed_index_state = next_state
+ 
+ 
++    @staticmethod
++    def _normalize_sql_for_timeout_signature(sql: str) -> str:
++        """Return a cheap template-like SQL shape used only for timeout diagnostics.
++
++        This deliberately avoids a full SQL parser: constants are erased and
++        whitespace is collapsed so repeated instances of the same template map
++        to the same signature, while different workload phases usually diverge.
++        """
++        try:
++            text = str(sql or "").lower()
++            text = re.sub(r"'([^']|'')*'", "?", text)
++            text = re.sub(r'"([^"\\]|\\.)*"', "?", text)
++            text = re.sub(r"\b\d+(?:\.\d+)?\b", "?", text)
++            text = re.sub(r"\s+", " ", text).strip()
++            return text[:512]
++        except Exception:
++            return str(sql or "")[:512]
++
++    def _workload_timeout_signature(self, workload: Optional[List[str]]) -> Set[str]:
++        if not workload:
++            return set()
++        sig: Set[str] = set()
++        for q in workload:
++            norm = self._normalize_sql_for_timeout_signature(q)
++            if norm:
++                sig.add(norm)
++        return sig
++
++    @staticmethod
++    def _signature_jaccard(a: Set[str], b: Set[str]) -> Optional[float]:
++        if not a or not b:
++            return None
++        return float(len(a & b)) / float(max(1, len(a | b)))
++
++    def _clear_timeout_recovery_flags(self) -> None:
++        self._timeout_state = "normal"
++        self._timeout_recovery_action = ""
++        self._timeout_workload_similarity = None
++        self._timeout_bad_old_conf = set()
++        self._timeout_force_full_budget_once = False
++
++    def _soft_timeout_memory_reset(self, reason: str) -> None:
++        """Clear stale benefit/uncertainty memories without touching physical DB state.
++
++        The driver owns physical reconfiguration and should account for transition
++        cost. Timeout recovery therefore must not call db_con2.drop_all_indexes()
++        or mutate the caller's old_conf set behind the driver's back.
++        """
++        logger.critical("Timeout recovery: soft memory reset (%s); physical diff is left to main.py", reason)
++        for attr in (
++            "columns_benefit",
++            "idx_error_smooth",
++            "idx_abs_error_smooth",
++            "idx_alphas",
++            "idx_alphas_shadow",
++            "idx_seen_cnt",
++        ):
++            try:
++                getattr(self, attr).clear()
++            except Exception:
++                pass
++
+     def _handle_timeout_policy(
+             self,
+             runtimes: List[int],
+             old_conf: Set[IndexKey],
+             workload: Optional[List[str]] = None,
+     ) -> Optional[Set[IndexKey]]:
+-        """Handle timeout signals from the execution stage.
+-
+-        Semantics in this repo: at round k we *execute* workload W_k under the
+-        current physical configuration S_k (old_conf), then we *recommend*
+-        a configuration S_{k+1} to be applied for the next round.
+-
+-        Therefore, when a timeout happens under an empty/weak S_k, returning the
+-        same config (or skipping tuning) will typically cause repeated timeouts.
+-        The safest recovery is to reset and still run the normal
+-        profile-&-select pipeline on the *current* workload to produce S_{k+1}.
++        """Handle execution-stage timeout signals.
++
++        Round semantics in this repo are:
++            execute W_k under S_k (= old_conf), then recommend S_{k+1}.
++
++        A timeout under S_k is therefore evidence that the incumbent is unsafe or
++        stale for the *current* workload. Returning last_stable_config can move
++        the system back to the previous workload phase, which is exactly the
++        repeated-timeout failure mode seen at phase boundaries.
++
++        Mainline recovery is consequently:
++          1. never force rollback on first timeout;
++          2. mark old_conf as timeout-suspect for one retain/swap decision;
++          3. force a full current-candidate evaluation budget for this workload;
++          4. optionally soft-reset stale memories after repeated timeouts;
++          5. let the normal estimate -> choose pipeline produce S_{k+1}.
+         """
+-        is_timeout = any(rt >= self.timeout for rt in runtimes)
++        is_timeout = any(float(rt) >= float(self.timeout) for rt in (runtimes or []))
++        curr_sig = self._workload_timeout_signature(workload)
+ 
+-        # --- Case A: normal run (no timeout) ---
++        # Normal execution: this old_conf has been observed stable for W_k.
+         if not is_timeout:
+             self.consecutive_timeouts = 0
+-            try:
+-                self._timeout_state = "normal"
+-            except Exception:
+-                pass
++            self._clear_timeout_recovery_flags()
+             self.last_stable_config = set(old_conf)
++            self._last_stable_workload_sig = set(curr_sig)
++            self._prev_workload_sig = set(curr_sig)
+             return None
+ 
+-        # --- Case B: timeout detected ---
+         self.consecutive_timeouts += 1
+ 
++        stable_sig = set(getattr(self, "_last_stable_workload_sig", set()) or set())
++        sim = self._signature_jaccard(curr_sig, stable_sig)
++        self._timeout_workload_similarity = sim
++
+         has_stable = bool(getattr(self, "last_stable_config", None))
+-        is_cold_start = (not old_conf) or (not has_stable) or (int(getattr(self, "workload_count", 0)) == 0)
++        has_old = bool(old_conf)
++        is_cold_start = (not has_old) or (not has_stable) or (int(getattr(self, "workload_count", 0)) == 0)
++        shift_threshold = float(getattr(self, "timeout_shift_similarity_threshold", 0.35))
++        looks_like_shift = (sim is None and bool(stable_sig) and bool(curr_sig)) or (sim is not None and sim < shift_threshold)
+ 
+-        timeout_type = "cold_start" if is_cold_start else "regression"
+-        try:
+-            self._timeout_state = timeout_type
+-        except Exception:
+-            pass
++        if is_cold_start:
++            timeout_type = "timeout_cold_start"
++        elif looks_like_shift:
++            timeout_type = "timeout_phase_shift"
++        else:
++            timeout_type = "timeout_regression"
++
++        # This is the key policy change: timeout never returns last_stable_config
++        # on the mainline. It only annotates this round so the normal chooser can
++        # produce a current-workload recommendation.
++        self._timeout_state = timeout_type
++        self._timeout_recovery_action = "replan_current_workload"
++        self._timeout_bad_old_conf = set(old_conf)
++        self._timeout_force_full_budget_once = bool(getattr(self, "timeout_force_full_budget", True))
++
++        reset_after = max(1, int(getattr(self, "timeout_reset_after", 2)))
++        if self.consecutive_timeouts >= reset_after:
++            self._soft_timeout_memory_reset(f"{timeout_type}:consecutive={self.consecutive_timeouts}")
++            # Keep the timeout-suspect old_conf marker after memory reset so
++            # retain/swap still knows which incumbents just failed execution.
++            self._timeout_bad_old_conf = set(old_conf)
++            self._timeout_recovery_action = "soft_reset_and_replan_current_workload"
+ 
+         logger.warning(
+-            "Timeout detected! type=%s consecutive=%d",
++            "Timeout detected! type=%s consecutive=%d similarity=%s action=%s old_conf=%d",
+             timeout_type,
+             self.consecutive_timeouts,
++            "NA" if sim is None else f"{sim:.3f}",
++            self._timeout_recovery_action,
++            len(old_conf or set()),
+         )
+ 
+-        def _hard_reset(reason: str) -> None:
+-            """Reset tuner+DB state, then allow the main pipeline to run."""
+-            logger.critical("Timeout recovery: hard reset (%s).", reason)
+-            try:
+-                # Bring DB back to a clean state.
+-                self.db_con2.drop_all_indexes()
+-            except Exception as e:
+-                logger.error("Failed to drop all indexes during hard reset: %s", e)
+-
+-            # Clear physical snapshot (so the downstream pipeline sees empty S_k).
+-            try:
+-                old_conf.clear()
+-            except Exception:
+-                pass
+-
+-            # Clear benefit memories / uncertainty trackers.
+-            try:
+-                self.columns_benefit.clear()
+-            except Exception:
+-                pass
+-            for attr in ("idx_error_smooth", "idx_abs_error_smooth", "idx_alphas"):
+-                try:
+-                    getattr(self, attr).clear()
+-                except Exception:
+-                    pass
+-
+-            # Reset counters so _estimate_benefits enters the "first-round" path.
+-            self.workload_count = 0
+-            self.consecutive_timeouts = 0
+-            try:
+-                self.last_stable_config.clear()
+-            except Exception:
+-                self.last_stable_config = set()
+-
+-            # Hint to Phase 0.5 candidate generator: prefer plan-first, but must
+-            # be able to fall back to SQL parsing if EXPLAIN fails.
+-            try:
+-                self._force_hybrid_extract_once = True
+-            except Exception:
+-                pass
+-
+-        # --- Class 1: cold-start timeout ---
+-        # Empty/unknown config timed out -> reset and STILL tune on current workload.
+-        if is_cold_start:
+-            _hard_reset("cold_start")
+-            return None
+-
+-        # --- Class 2: regression timeout ---
+-        # A previously stable config started timing out.
+-        # Step 1: rollback once to the last stable config for the next round.
+-        if self.consecutive_timeouts == 1 and has_stable:
+-            logger.warning("Timeout regression: rolling back to last stable config for next round.")
+-            return set(self.last_stable_config)
+-
+-        # Step 2: repeated regression timeouts -> hard reset and re-tune.
+-        _hard_reset("regression")
++        self._prev_workload_sig = set(curr_sig)
+         return None
++
+     def run(
+             self,
+             workload: List[str],
+diff --git a/adasel/config/adaselect_g0_phase1_curr_only.json b/adasel/config/adaselect_g0_phase1_curr_only.json
+index 2828f9c..74025de 100644
+--- a/adasel/config/adaselect_g0_phase1_curr_only.json
++++ b/adasel/config/adaselect_g0_phase1_curr_only.json
+@@ -36,5 +36,14 @@
+   "wdcg_dml_ema_tau_sec": 300.0,
+   "choose_policy": "retain_swap",
+   "retain_swap_delta": 0.05,
+-  "retain_swap_admit_floor": 0.0
++  "retain_swap_admit_floor": 0.0,
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
+ }
+diff --git a/adasel/config/adaselect_g0_phase1_mainline.json b/adasel/config/adaselect_g0_phase1_mainline.json
+index fb438a7..c815cdf 100644
+--- a/adasel/config/adaselect_g0_phase1_mainline.json
++++ b/adasel/config/adaselect_g0_phase1_mainline.json
+@@ -45,5 +45,14 @@
+   "retain_swap_risk_weight": 0.1,
+   "retain_swap_maintenance_weight": 0.05,
+   "retain_swap_create_cost_weight": 1.0,
+-  "retain_swap_stale_horizon": 10
++  "retain_swap_stale_horizon": 10,
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
+ }
+diff --git a/adasel/config/adaselect_g0_phase1_retain_swap.json b/adasel/config/adaselect_g0_phase1_retain_swap.json
+index fb438a7..c815cdf 100644
+--- a/adasel/config/adaselect_g0_phase1_retain_swap.json
++++ b/adasel/config/adaselect_g0_phase1_retain_swap.json
+@@ -45,5 +45,14 @@
+   "retain_swap_risk_weight": 0.1,
+   "retain_swap_maintenance_weight": 0.05,
+   "retain_swap_create_cost_weight": 1.0,
+-  "retain_swap_stale_horizon": 10
++  "retain_swap_stale_horizon": 10,
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
+ }
+diff --git a/adasel/config/adaselect_g0_phase1_topk_beta.json b/adasel/config/adaselect_g0_phase1_topk_beta.json
+index 88b6131..4b92123 100644
+--- a/adasel/config/adaselect_g0_phase1_topk_beta.json
++++ b/adasel/config/adaselect_g0_phase1_topk_beta.json
+@@ -34,5 +34,14 @@
+   "wdcg_table_stats_batch_size": 200,
+   "wdcg_dml_ema_alpha": 0.3,
+   "wdcg_dml_ema_tau_sec": 300.0,
+-  "choose_policy": "topk_beta"
++  "choose_policy": "topk_beta",
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
+ }
+diff --git a/adasel/main.py b/adasel/main.py
+index 4bc6267..130fe65 100644
+--- a/adasel/main.py
++++ b/adasel/main.py
+@@ -373,6 +373,11 @@ def main() -> int:
+                 timeout_round = 1
+         exec_ms = float(sum(runtimes))
+         exec_wall_ms = (perf_counter() - exec_start) * 1000.0
++        try:
++            timeout_limit = float(getattr(tuner, "timeout", cfg_obj.get("timeout", TIMEOUT_PENALTY_MS)))
++            timeout_round = 1 if any(float(x) >= timeout_limit for x in runtimes) else int(timeout_round)
++        except Exception:
++            pass
+ 
+         # (2) drop virtual indexes
+         try:
+@@ -512,6 +517,12 @@ def main() -> int:
+             swap_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("swap_count", None),
+             blocked_swap_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("blocked_swap_count", None),
+             visible_action_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("visible_total", None),
++            timeout_state=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_state", getattr(tuner, "_timeout_state", None)),
++            timeout_recovery_action=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_recovery_action", getattr(tuner, "_timeout_recovery_action", None)),
++            timeout_workload_similarity=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_workload_similarity", getattr(tuner, "_timeout_workload_similarity", None)),
++            timeout_bad_old_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_bad_old_count", len(getattr(tuner, "_timeout_bad_old_conf", set()) or set())),
++            timeout_full_budget=wdcg_stats.get("timeout_full_budget", None),
++            timeout_drop_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_drop_count", None),
+             corr_trials=wdcg_stats.get("corr_trials", None),
+             old_relevant_count=wdcg_stats.get("old_relevant_count", None),
+             old_relevant_not_appearing_count=wdcg_stats.get("old_relevant_not_appearing_count", None),
+diff --git a/adaselect_pp/tests/test_retain_swap_choose_config.py b/adaselect_pp/tests/test_retain_swap_choose_config.py
+index 48824b6..84fee57 100644
+--- a/adaselect_pp/tests/test_retain_swap_choose_config.py
++++ b/adaselect_pp/tests/test_retain_swap_choose_config.py
+@@ -30,6 +30,25 @@ def _mk_tuner(*, max_num: int = 1, costs=None) -> AdaSelect:
+     t.beta = 1.1
+     t.workload_count = 5
+     t.choose_policy = "retain_swap"
++    t.timeout = 30_000
++    t.timeout_policy = "replan"
++    t.timeout_reset_after = 2
++    t.timeout_shift_similarity_threshold = 0.35
++    t.timeout_force_full_budget = True
++    t.timeout_retain_penalty = 0.75
++    t.timeout_disable_keep_bonus = True
++    t.timeout_delta_scale = 0.50
++    t.timeout_drop_unsupported_old = True
++    t.timeout_drop_floor = 0.50
++    t.consecutive_timeouts = 0
++    t.last_stable_config = set()
++    t._timeout_state = "normal"
++    t._timeout_recovery_action = ""
++    t._timeout_workload_similarity = None
++    t._timeout_bad_old_conf = set()
++    t._timeout_force_full_budget_once = False
++    t._last_stable_workload_sig = set()
++    t._prev_workload_sig = set()
+ 
+     t.retain_swap_delta = 0.05
+     t.retain_swap_admit_floor = 0.0
+@@ -59,19 +78,26 @@ def _mk_tuner(*, max_num: int = 1, costs=None) -> AdaSelect:
+         "trans_create": 0.0,
+         "trans_drop": 0.0,
+     }
++    t._last_evaluated_set = set()
++    t._last_eval_order = []
+     t._last_appearing_curr_set = set()
+     t._last_keep_visible_set = set()
+     t._last_visible_action_set = set()
+     t._last_candidate_conf = set()
+     t._last_final_conf = set()
+     t._last_net_benefit_map = {}
++    t._last_obs_delta_map = {}
++    t._last_obs_src_map = {}
++    t._last_support_count_map = {}
++    t._last_main_target_set = set()
++    t._last_corr_target_set = set()
++    t._last_index_meta_map = {}
+     t._last_retention_score_map = {}
+     t._last_admission_score_map = {}
+     t._last_swap_partner_map = {}
+     t._last_blocked_swap_map = {}
+     t._last_decision_stats = {}
+     t._last_wdcg_score_map = {}
+-    t._last_support_count_map = {}
+     t._last_wdcg_stats = {}
+     t._last_deadzone_stats = {"deadzone_old_support": 0, "deadzone_blocked": 0}
+     return t
+@@ -163,3 +189,82 @@ def test_cold_start_seeds_from_visible_current_candidates_even_when_scores_are_z
+     assert t._last_decision_stats["policy"] == "retain_swap"
+     assert t._last_decision_stats["admitted_new_count"] == 2
+     assert t._last_visible_action_set == {a, b}
++
++
++
++def test_timeout_recovery_replans_current_workload_without_rollback_or_physical_reset():
++    old = _idx("old_phase")
++    stable = _idx("stable_old_phase")
++    t = _mk_tuner(max_num=1)
++    t.timeout = 100
++    t.workload_count = 5
++    t.last_stable_config = {stable}
++    t._last_stable_workload_sig = t._workload_timeout_signature([
++        "select * from orders where o_orderstatus = 'F'"
++    ])
++
++    class DB2:
++        dropped = False
++        def drop_all_indexes(self):  # should never be called by timeout policy
++            self.dropped = True
++
++    t.db_con2 = DB2()
++    old_conf = {old}
++
++    forced = t._handle_timeout_policy(
++        [100],
++        old_conf,
++        ["select * from lineitem where l_shipdate > date '1998-01-01'"],
++    )
++
++    assert forced is None
++    assert old_conf == {old}
++    assert t.db_con2.dropped is False
++    assert t._timeout_state == "timeout_phase_shift"
++    assert t._timeout_recovery_action == "replan_current_workload"
++    assert t._timeout_bad_old_conf == {old}
++    assert t._timeout_force_full_budget_once is True
++
++
++def test_timeout_penalty_disables_keep_bonus_and_prefers_current_phase_newcomer():
++    old = _idx("old_phase")
++    new = _idx("new_phase")
++    t = _mk_tuner(max_num=1, costs={old[1]: 0.0, new[1]: 0.0})
++    t.columns_benefit = {old: 10.0, new: 9.0}
++    t._last_appearing_curr_set = {new}
++    t._last_keep_visible_set = {old}
++    t._last_wdcg_score_map = {new: 1.0, old: 0.0}
++    t._last_support_count_map = {new: 3}
++    t.installed_index_state = {old: _state(old)}
++    t._timeout_state = "timeout_phase_shift"
++    t._timeout_recovery_action = "replan_current_workload"
++    t._timeout_bad_old_conf = {old}
++
++    selected = set(t._choose_config({old}))
++
++    assert selected == {new}
++    assert t._last_decision_stats["timeout_state"] == "timeout_phase_shift"
++    assert t._last_decision_stats["timeout_bad_old_count"] == 1
++    assert t._last_decision_stats["timeout_drop_count"] == 1
++    assert t._last_decision_stats["swap_count"] == 0
++    assert t._last_decision_stats["admitted_new"] == [new]
++    assert t._last_decision_stats["dropped_old"] == [old]
++    assert t._last_retention_score_map[old] < t._last_admission_score_map[new]
++
++
++
++def test_timeout_recovery_can_drop_unsupported_old_without_replacement():
++    old = _idx("old_phase")
++    t = _mk_tuner(max_num=1, costs={old[1]: 0.0})
++    t.columns_benefit = {old: 10.0}
++    t._last_appearing_curr_set = set()
++    t._last_keep_visible_set = {old}
++    t.installed_index_state = {old: _state(old)}
++    t._timeout_state = "timeout_phase_shift"
++    t._timeout_bad_old_conf = {old}
++
++    selected = set(t._choose_config({old}))
++
++    assert selected == set()
++    assert t._last_decision_stats["timeout_drop_count"] == 1
++    assert t._last_decision_stats["dropped_old"] == [old]
+diff --git a/util/metrics_recorder.py b/util/metrics_recorder.py
+index a801d09..161841e 100644
+--- a/util/metrics_recorder.py
++++ b/util/metrics_recorder.py
+@@ -146,8 +146,14 @@ class MetricsRecorder:
+         # configurations
+         "old",
+         "new",
+-        # robustness
++        # robustness / timeout recovery
+         "timeout",
++        "timeout_state",
++        "timeout_recovery_action",
++        "timeout_workload_similarity",
++        "timeout_bad_old_count",
++        "timeout_full_budget",
++        "timeout_drop_count",
+         "exit_code",
+         "message",
+     )

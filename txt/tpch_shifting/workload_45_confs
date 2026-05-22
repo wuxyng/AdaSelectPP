@@ -1,0 +1,21 @@
+(('l_discount',), ('c_phone',), ('s_nationkey',), ('l_quantity',), ('l_receiptdate',), ('l_commitdate',), ('s_address',), ('l_suppkey',), ('ps_availqty',), ('s_name',))	1860739205.14
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_partkey',), ('l_suppkey',), ('n_name',), ('p_name',), ('ps_availqty',), ('s_address',), ('s_name',))	1879053934.6200001
+(('c_phone',), ('l_extendedprice',), ('l_partkey',), ('l_shipdate',), ('l_suppkey',), ('o_orderdate',), ('ps_availqty',), ('s_address',), ('s_name',), ('s_nationkey',))	1879061675.55
+(('c_phone',), ('l_commitdate',), ('l_partkey',), ('l_receiptdate',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_address',))	1879126676.57
+(('c_acctbal',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('l_quantity',), ('l_shipdate',), ('l_suppkey',), ('ps_availqty',), ('s_address',), ('s_name',))	1879053948.89
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_quantity',), ('l_receiptdate',), ('l_shipdate',), ('l_suppkey',), ('n_name',), ('ps_availqty',), ('s_address',))	1860739344.97
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_shipdate',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('p_name',), ('s_address',))	1860819722.15
+(('c_acctbal',), ('c_phone',), ('l_partkey',), ('l_receiptdate',), ('n_name',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_name',), ('s_nationkey',))	1878268248.19
+(('c_acctbal',), ('c_phone',), ('l_receiptdate',), ('l_shipdate',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_address',), ('s_name',), ('s_nationkey',))	71592174.3499999
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_receiptdate',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('ps_availqty',), ('s_name',), ('s_nationkey',))	1860811947.09
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_quantity',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('s_address',))	1860819736.41
+(('c_phone',), ('l_commitdate',), ('l_partkey',), ('l_receiptdate',), ('n_name',), ('p_name',), ('ps_availqty',), ('s_address',), ('s_name',), ('s_nationkey',))	1878195491.98
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('ps_availqty',), ('s_address',))	1860819736.41
+(('l_extendedprice',), ('l_partkey',), ('l_quantity',), ('l_suppkey',), ('o_custkey',), ('o_orderdate',), ('ps_availqty',), ('s_address',), ('s_name',), ('s_nationkey',))	1879134417.5
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('l_suppkey',), ('n_name',), ('ps_availqty',), ('s_address',), ('s_nationkey',))	1879054040.32
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_quantity',), ('l_suppkey',), ('n_name',), ('p_name',), ('ps_availqty',))	1860739359.24
+(('l_commitdate',), ('l_discount',), ('l_partkey',), ('l_quantity',), ('l_suppkey',), ('o_orderdate',), ('ps_availqty',), ('s_address',), ('s_name',), ('s_nationkey',))	1879061675.55
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_quantity',), ('l_suppkey',), ('n_name',), ('ps_availqty',), ('s_address',), ('s_nationkey',))	1860739359.24
+(('c_acctbal',), ('l_discount',), ('l_extendedprice',), ('l_quantity',), ('l_receiptdate',), ('l_shipdate',), ('l_suppkey',), ('o_custkey',), ('ps_availqty',), ('s_address',))	1860812101.18
+(('c_acctbal',), ('c_phone',), ('l_discount',), ('l_extendedprice',), ('l_quantity',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('ps_availqty',), ('s_address',))	1860812101.18
+1879736674.98

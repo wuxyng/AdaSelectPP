@@ -1,0 +1,787 @@
+('l_discount', 'l_shipdate', 'l_quantity') 8654.647588729858
+('l_suppkey', 'l_receiptdate', 'l_commitdate') 4591.184139251709
+('l_tax', 'l_discount', 'l_linestatus') 5009.470820426941
+('l_extendedprice', 'l_tax', 'l_linestatus') 6398.237466812134
+('p_brand',) 273.16200733184814
+('l_partkey', 'l_extendedprice') 5248.6252784729
+('l_shipdate', 'l_tax') 3454.447031021118
+('l_quantity', 'l_shipdate', 'l_tax') 5254.292011260986
+('l_returnflag', 'l_shipdate', 'l_linestatus') 4513.420462608337
+('c_mktsegment',) 215.08634090423584
+('s_acctbal', 's_phone', 's_nationkey') 62.28363513946533
+('l_tax', 'l_extendedprice', 'l_shipdate') 7453.702449798584
+('l_quantity', 'l_suppkey', 'l_partkey') 9556.868433952332
+('l_shipinstruct', 'l_extendedprice', 'l_shipmode') 18934.409618377686
+('l_quantity', 'l_shipinstruct', 'l_partkey') 14209.593176841736
+('l_shipdate',) 2226.664662361145
+('l_shipdate', 'l_discount', 'l_tax') 5118.941426277161
+('l_shipmode', 'l_commitdate', 'l_shipdate') 9844.453692436218
+('s_acctbal',) 10.838508605957031
+('s_phone', 's_address') 32.75477886199951
+('l_partkey', 'l_suppkey', 'l_discount') 5988.367438316345
+('l_partkey', 'l_extendedprice', 'l_quantity') 7396.589279174805
+('l_linestatus', 'l_returnflag', 'l_quantity') 4719.029545783997
+('s_address', 's_nationkey', 's_phone') 16.541242599487305
+('l_shipinstruct', 'l_quantity', 'l_extendedprice') 18131.30247592926
+('l_tax', 'l_linestatus', 'l_quantity') 5289.331078529358
+('c_acctbal', 'c_nationkey', 'c_address') 396.2078094482422
+('l_linestatus', 'l_discount', 'l_shipdate') 5711.848497390747
+('s_name', 's_nationkey', 's_acctbal') 56.94460868835449
+('o_totalprice',) 3345.288634300232
+('l_extendedprice', 'l_linestatus') 4891.747713088989
+('p_mfgr', 'p_size') 211.12000942230225
+('l_quantity', 'l_partkey', 'l_shipinstruct') 13922.001600265503
+('l_discount', 'l_tax', 'l_extendedprice') 6852.618932723999
+('l_discount', 'l_linestatus', 'l_quantity') 6030.864715576172
+('p_mfgr', 'p_type') 535.0382328033447
+('l_tax', 'l_quantity', 'l_linestatus') 5800.856590270996
+('l_partkey', 'l_shipinstruct', 'l_quantity') 10358.361959457397
+('o_orderdate',) 668.6116456985474
+('c_nationkey', 'c_acctbal', 'c_phone') 639.7202014923096
+('l_extendedprice', 'l_returnflag', 'l_quantity') 7059.490084648132
+('s_nationkey', 's_name', 's_acctbal') 43.83397102355957
+('s_phone', 's_acctbal', 's_address') 21.056413650512695
+('l_commitdate', 'l_receiptdate', 'l_shipmode') 5587.338447570801
+('l_returnflag', 'l_discount', 'l_extendedprice') 7269.944548606873
+('l_linestatus', 'l_tax', 'l_returnflag') 5250.593543052673
+('l_discount', 'l_shipmode', 'l_extendedprice') 18526.155471801758
+('l_extendedprice', 'l_discount', 'l_shipdate') 5404.336452484131
+('l_quantity', 'l_partkey', 'l_extendedprice') 6872.554779052734
+('p_size', 'p_type', 'p_brand') 411.2668037414551
+('l_discount', 'l_suppkey', 'l_quantity') 12331.340551376343
+('l_tax', 'l_returnflag') 4574.89025592804
+('l_shipdate', 'l_quantity', 'l_extendedprice') 6342.149972915649
+('l_extendedprice', 'l_shipmode', 'l_discount') 19347.2740650177
+('o_totalprice', 'o_orderdate') 2902.821183204651
+('l_quantity', 'l_returnflag', 'l_discount') 5361.365437507629
+('l_suppkey',) 3860.341191291809
+('c_phone', 'c_address', 'c_nationkey') 463.02926540374756
+('l_returnflag', 'l_quantity', 'l_linestatus') 5307.050943374634
+('s_address', 's_acctbal', 's_nationkey') 14.751076698303223
+('l_shipmode', 'l_discount', 'l_shipinstruct') 15472.773671150208
+('p_container', 'p_size', 'p_brand') 308.2820177078247
+('l_shipmode', 'l_receiptdate', 'l_shipdate') 8479.485511779785
+('s_address', 's_name', 's_phone') 16.07835292816162
+('l_tax', 'l_discount', 'l_returnflag') 6618.49582195282
+('l_extendedprice', 'l_tax', 'l_returnflag') 6689.527988433838
+('l_shipmode', 'l_extendedprice', 'l_discount') 18156.10432624817
+('l_returnflag', 'l_quantity') 3433.2265853881836
+('l_shipdate', 'l_partkey', 'l_suppkey') 4697.201251983643
+('l_extendedprice',) 4942.477107048035
+('l_discount', 'l_extendedprice', 'l_suppkey') 17383.753895759583
+('c_nationkey', 'c_phone', 'c_name') 459.3867063522339
+('s_address', 's_phone', 's_acctbal') 15.317678451538086
+('l_discount', 'l_shipdate') 4086.5918397903442
+('l_linestatus', 'l_tax', 'l_discount') 5396.973013877869
+('l_shipdate', 'l_extendedprice', 'l_quantity') 7106.721520423889
+('l_shipmode', 'l_discount', 'l_partkey') 12105.700969696045
+('o_custkey', 'o_orderdate', 'o_totalprice') 1587.620496749878
+('l_tax', 'l_discount') 5460.8893394470215
+('c_address', 'c_name', 'c_nationkey') 291.60618782043457
+('s_acctbal', 's_address') 37.856459617614746
+('c_nationkey', 'c_address', 'c_name') 350.8819341659546
+('l_linestatus', 'l_discount', 'l_extendedprice') 5908.043265342712
+('l_partkey', 'l_shipdate', 'l_quantity') 3331.9928646087646
+('l_extendedprice', 'l_discount', 'l_shipinstruct') 19534.353613853455
+('p_brand', 'p_size', 'p_container') 440.27769565582275
+('l_shipinstruct', 'l_partkey', 'l_discount') 13345.687627792358
+('l_tax', 'l_returnflag', 'l_linestatus') 5214.620232582092
+('l_discount', 'l_quantity', 'l_shipdate') 6367.650151252747
+('l_returnflag', 'l_extendedprice', 'l_tax') 6267.8062915802
+('ps_supplycost', 'ps_availqty') 1201.966643333435
+('s_nationkey', 's_phone') 21.90089225769043
+('c_name', 'c_acctbal') 533.124566078186
+('l_quantity', 'l_linestatus', 'l_tax') 6036.450386047363
+('l_discount', 'l_returnflag', 'l_linestatus') 6005.279541015625
+('l_extendedprice', 'l_tax', 'l_discount') 6478.047490119934
+('l_shipmode', 'l_discount') 10942.853569984436
+('l_shipinstruct', 'l_extendedprice', 'l_quantity') 17743.388533592224
+('l_returnflag', 'l_shipdate', 'l_discount') 4513.866066932678
+('l_shipdate', 'l_returnflag', 'l_tax') 3817.305326461792
+('ps_supplycost',) 1016.9879198074341
+('l_extendedprice', 'l_discount', 'l_partkey') 7625.829696655273
+('l_shipdate', 'l_suppkey', 'l_extendedprice') 8799.756050109863
+('c_acctbal', 'c_phone', 'c_name') 559.290885925293
+('l_linestatus', 'l_shipdate', 'l_returnflag') 5137.507319450378
+('c_name', 'c_acctbal', 'c_phone') 660.7606410980225
+('l_shipdate', 'l_partkey', 'l_discount') 3880.3259134292603
+('l_extendedprice', 'l_shipdate', 'l_suppkey') 14402.064323425293
+('s_nationkey', 's_acctbal', 's_phone') 48.08449745178223
+('l_partkey', 'l_shipmode', 'l_shipinstruct') 10288.370490074158
+('l_linestatus', 'l_returnflag', 'l_shipdate') 3988.178253173828
+('l_partkey', 'l_extendedprice', 'l_shipdate') 6483.2763671875
+('l_discount', 'l_shipinstruct') 9216.127514839172
+('l_shipdate', 'l_linestatus', 'l_discount') 5046.518683433533
+('l_extendedprice', 'l_shipinstruct') 13861.947298049927
+('l_commitdate', 'l_suppkey') 4446.849942207336
+('l_receiptdate', 'l_shipdate') 2924.8721599578857
+('o_shippriority', 'o_custkey') 1127.8554201126099
+('s_address', 's_nationkey') 14.119505882263184
+('s_acctbal', 's_name', 's_phone') 51.13101005554199
+('o_orderdate', 'o_custkey') 837.4418020248413
+('l_shipdate', 'l_tax', 'l_linestatus') 3951.422929763794
+('c_name', 'c_address') 529.916524887085
+('l_extendedprice', 'l_shipdate', 'l_returnflag') 6460.83128452301
+('l_discount', 'l_linestatus', 'l_shipdate') 5866.601943969727
+('l_quantity', 'l_discount', 'l_linestatus') 5172.11127281189
+('l_linestatus', 'l_discount', 'l_tax') 5303.174614906311
+('l_discount', 'l_quantity', 'l_shipinstruct') 15783.438324928284
+('l_quantity', 'l_extendedprice', 'l_linestatus') 7703.229069709778
+('l_partkey', 'l_shipmode', 'l_extendedprice') 12701.324701309204
+('l_discount', 'l_extendedprice') 6810.648441314697
+('l_shipmode', 'l_commitdate') 6400.302290916443
+('s_phone', 's_address', 's_nationkey') 22.645950317382812
+('l_extendedprice', 'l_returnflag', 'l_shipdate') 6254.5881271362305
+('l_discount', 'l_partkey') 4813.21918964386
+('l_receiptdate', 'l_commitdate', 'l_shipmode') 5911.604046821594
+('l_shipmode', 'l_shipinstruct', 'l_discount') 15061.923265457153
+('c_acctbal', 'c_nationkey') 198.42612743377686
+('l_extendedprice', 'l_partkey') 4614.693284034729
+('l_linestatus', 'l_shipdate', 'l_discount') 5178.45356464386
+('s_address', 's_acctbal', 's_name') 21.63839340209961
+('l_discount', 'l_shipinstruct', 'l_extendedprice') 18853.58774662018
+('l_discount', 'l_quantity', 'l_extendedprice') 7737.723827362061
+('l_extendedprice', 'l_discount', 'l_tax') 6838.008403778076
+('s_nationkey',) 9.305357933044434
+('l_returnflag', 'l_quantity', 'l_discount') 6852.198958396912
+('l_discount', 'l_shipdate', 'l_extendedprice') 6188.885688781738
+('l_quantity', 'l_suppkey') 9059.94713306427
+('l_shipmode', 'l_quantity', 'l_extendedprice') 17990.13614654541
+('l_quantity', 'l_tax', 'l_extendedprice') 6919.104218482971
+('l_discount', 'l_shipdate', 'l_partkey') 4178.4480810165405
+('l_extendedprice', 'l_shipmode') 15091.060400009155
+('l_partkey', 'l_discount', 'l_suppkey') 9934.493064880371
+('l_extendedprice', 'l_partkey', 'l_suppkey') 13505.446434020996
+('l_extendedprice', 'l_shipdate', 'l_discount') 7780.593514442444
+('l_linestatus', 'l_quantity', 'l_returnflag') 4859.45999622345
+('l_receiptdate', 'l_shipdate', 'l_shipmode') 6265.529632568359
+('l_suppkey', 'l_quantity', 'l_shipdate') 9321.340680122375
+('l_returnflag', 'l_shipdate') 2802.9637336730957
+('l_suppkey', 'l_shipdate') 3159.416913986206
+('o_orderdate', 'o_shippriority', 'o_custkey') 1477.882981300354
+('l_extendedprice', 'l_shipinstruct', 'l_discount') 19582.245230674744
+('l_quantity', 'l_extendedprice') 6252.962827682495
+('l_extendedprice', 'l_quantity', 'l_suppkey') 18029.831528663635
+('l_quantity', 'l_shipmode', 'l_extendedprice') 18920.72069644928
+('l_extendedprice', 'l_shipmode', 'l_quantity') 19208.46426486969
+('l_receiptdate', 'l_shipdate', 'l_commitdate') 2677.7154207229614
+('n_name', 'n_regionkey') 1.3240575790405273
+('l_shipmode', 'l_partkey', 'l_discount') 13025.203824043274
+('s_nationkey', 's_phone', 's_address') 23.662090301513672
+('l_suppkey', 'l_extendedprice', 'l_discount') 14469.864964485168
+('l_discount', 'l_tax') 4663.631796836853
+('ps_availqty',) 368.3910369873047
+('c_address', 'c_acctbal', 'c_nationkey') 230.55315017700195
+('l_extendedprice', 'l_quantity', 'l_returnflag') 5766.707062721252
+('l_quantity', 'l_extendedprice', 'l_suppkey') 17507.48038291931
+('l_shipmode', 'l_extendedprice', 'l_quantity') 17912.5657081604
+('l_tax', 'l_returnflag', 'l_discount') 6554.117918014526
+('l_discount', 'l_partkey', 'l_shipdate') 4930.957078933716
+('l_discount', 'l_linestatus', 'l_extendedprice') 5767.237663269043
+('s_phone', 's_nationkey', 's_address') 22.419452667236328
+('l_returnflag', 'l_linestatus', 'l_discount') 6150.04026889801
+('l_suppkey', 'l_discount', 'l_partkey') 8307.496666908264
+('l_returnflag', 'l_tax', 'l_shipdate') 5389.321088790894
+('l_discount', 'l_quantity', 'l_tax') 7023.071765899658
+('l_linestatus', 'l_extendedprice', 'l_quantity') 6123.6947774887085
+('l_linestatus', 'l_quantity', 'l_discount') 5708.266377449036
+('l_linestatus', 'l_tax', 'l_quantity') 6514.777898788452
+('l_quantity', 'l_extendedprice', 'l_returnflag') 6187.911629676819
+('l_shipinstruct', 'l_discount') 11374.088525772095
+('l_discount', 'l_shipdate', 'l_tax') 5126.999616622925
+('l_tax', 'l_quantity') 4332.1287631988525
+('c_acctbal',) 173.81107807159424
+('l_suppkey', 'l_partkey', 'l_shipdate') 5407.639145851135
+('l_extendedprice', 'l_partkey', 'l_discount') 6465.164422988892
+('l_shipdate', 'l_suppkey') 3228.9819717407227
+('l_linestatus', 'l_returnflag') 2833.3325386047363
+('s_address', 's_name') 15.868306159973145
+('s_address', 's_phone', 's_nationkey') 14.924883842468262
+('l_discount', 'l_suppkey', 'l_partkey') 11794.037580490112
+('c_address', 'c_phone', 'c_nationkey') 249.01902675628662
+('l_extendedprice', 'l_suppkey', 'l_discount') 17076.937317848206
+('s_nationkey', 's_address', 's_phone') 15.774250030517578
+('l_quantity', 'l_suppkey', 'l_shipdate') 10121.110439300537
+('l_tax', 'l_discount', 'l_quantity') 6370.960593223572
+('l_extendedprice', 'l_quantity', 'l_discount') 6746.929049491882
+('l_extendedprice', 'l_tax', 'l_quantity') 8361.488580703735
+('l_suppkey', 'l_shipdate', 'l_extendedprice') 9561.366558074951
+('c_phone', 'c_name', 'c_acctbal') 346.60565853118896
+('c_acctbal', 'c_address', 'c_nationkey') 384.0240240097046
+('l_shipdate', 'l_returnflag') 2748.7573623657227
+('l_returnflag', 'l_shipdate', 'l_quantity') 5654.297113418579
+('l_partkey', 'l_quantity', 'l_shipinstruct') 10307.722091674805
+('l_quantity', 'l_shipdate', 'l_extendedprice') 7512.645244598389
+('c_acctbal', 'c_name', 'c_nationkey') 788.3937358856201
+('l_quantity', 'l_returnflag', 'l_linestatus') 4872.100472450256
+('l_linestatus', 'l_returnflag', 'l_tax') 4552.3494482040405
+('l_extendedprice', 'l_linestatus', 'l_returnflag') 7166.175007820129
+('p_type', 'p_brand', 'p_size') 497.22087383270264
+('s_phone', 's_address', 's_name') 22.68826961517334
+('l_receiptdate', 'l_suppkey', 'l_commitdate') 4320.25158405304
+('l_quantity', 'l_discount', 'l_shipinstruct') 16141.640067100525
+('l_suppkey', 'l_quantity', 'l_extendedprice') 14620.356917381287
+('l_returnflag', 'l_extendedprice') 5105.725646018982
+('c_name', 'c_acctbal', 'c_address') 546.3167428970337
+('c_acctbal', 'c_address', 'c_name') 396.35539054870605
+('l_suppkey', 'l_extendedprice') 9641.513228416443
+('l_discount', 'l_tax', 'l_linestatus') 6170.695066452026
+('l_quantity', 'l_extendedprice', 'l_discount') 6494.447469711304
+('o_orderstatus',) 526.4638662338257
+('l_shipinstruct', 'l_shipmode', 'l_partkey') 13053.434610366821
+('l_shipinstruct', 'l_shipmode') 10436.79678440094
+('l_shipdate', 'l_discount', 'l_extendedprice') 6362.430572509766
+('c_address',) 249.13430213928223
+('l_shipdate', 'l_extendedprice', 'l_partkey') 4963.081836700439
+('s_name',) 47.161102294921875
+('s_address', 's_nationkey', 's_name') 15.203237533569336
+('l_linestatus', 'l_discount') 4271.82149887085
+('l_extendedprice', 'l_partkey', 'l_shipmode') 17886.2384557724
+('l_extendedprice', 'l_returnflag', 'l_tax') 7122.324228286743
+('l_quantity', 'l_discount', 'l_partkey') 4623.62003326416
+('l_extendedprice', 'l_quantity') 6007.499694824219
+('l_discount', 'l_partkey', 'l_extendedprice') 6998.928785324097
+('l_shipdate', 'l_quantity', 'l_linestatus') 4072.32403755188
+('s_address', 's_acctbal') 16.14701747894287
+('p_brand', 'p_type', 'p_size') 446.1787939071655
+('l_partkey', 'l_suppkey') 3376.3768672943115
+('l_shipdate', 'l_discount') 4136.994361877441
+('l_returnflag', 'l_extendedprice', 'l_shipdate') 6327.8398513793945
+('c_nationkey', 'c_name') 618.4868812561035
+('c_phone', 'c_name', 'c_address') 375.699520111084
+('l_returnflag', 'l_tax', 'l_extendedprice') 5841.9269323349
+('s_acctbal', 's_name', 's_nationkey') 53.83431911468506
+('l_shipinstruct', 'l_discount', 'l_extendedprice') 17788.58518600464
+('l_extendedprice', 'l_linestatus', 'l_discount') 7199.834942817688
+('l_quantity', 'l_linestatus', 'l_shipdate') 5185.363173484802
+('l_shipinstruct', 'l_extendedprice', 'l_partkey') 16295.923113822937
+('l_quantity', 'l_discount', 'l_shipmode') 13500.436782836914
+('c_name', 'c_nationkey') 519.2354917526245
+('s_name', 's_address') 42.01328754425049
+('l_suppkey', 'l_partkey', 'l_extendedprice') 8356.967091560364
+('l_quantity', 'l_extendedprice', 'l_shipmode') 16370.133876800537
+('l_tax', 'l_extendedprice', 'l_linestatus') 5555.762887001038
+('s_phone', 's_address', 's_acctbal') 21.736860275268555
+('c_address', 'c_name') 205.5140733718872
+('p_container', 'p_size') 214.83051776885986
+('l_linestatus',) 1849.905252456665
+('l_returnflag', 'l_tax') 3296.0039377212524
+('c_acctbal', 'c_address') 351.0829210281372
+('p_size', 'p_container') 175.2145290374756
+('l_quantity', 'l_suppkey', 'l_extendedprice') 14434.524416923523
+('l_quantity', 'l_shipinstruct', 'l_extendedprice') 17946.456909179688
+('p_brand', 'p_container') 257.37464427948
+('s_phone', 's_name', 's_address') 22.899746894836426
+('s_phone', 's_nationkey') 19.695639610290527
+('l_shipdate', 'l_shipmode', 'l_commitdate') 8486.64915561676
+('s_address', 's_nationkey', 's_acctbal') 25.670289993286133
+('l_shipdate', 'l_extendedprice', 'l_tax') 5596.408843994141
+('c_nationkey', 'c_name', 'c_acctbal') 608.5618734359741
+('l_shipmode', 'l_receiptdate') 6120.388031005859
+('s_name', 's_address', 's_phone') 43.203115463256836
+('l_quantity', 'l_discount', 'l_tax') 6302.001357078552
+('l_discount', 'l_extendedprice', 'l_linestatus') 7094.32590007782
+('c_address', 'c_nationkey', 'c_phone') 249.44961071014404
+('o_custkey', 'o_shippriority') 762.0868682861328
+('l_discount', 'l_tax', 'l_returnflag') 5000.635385513306
+('l_linestatus', 'l_extendedprice', 'l_shipdate') 6284.5882177352905
+('o_orderdate', 'o_totalprice') 3178.813934326172
+('l_partkey', 'l_discount') 3329.105854034424
+('l_quantity', 'l_partkey', 'l_suppkey') 9526.517987251282
+('s_address', 's_phone', 's_name') 16.70396327972412
+('l_suppkey', 'l_discount', 'l_quantity') 11742.449879646301
+('l_shipdate', 'l_quantity', 'l_suppkey') 7833.316087722778
+('l_suppkey', 'l_extendedprice', 'l_quantity') 14753.561973571777
+('l_receiptdate', 'l_shipmode', 'l_shipdate') 6941.4085149765015
+('s_acctbal', 's_nationkey', 's_name') 83.16028118133545
+('o_totalprice', 'o_custkey', 'o_orderdate') 4729.2081117630005
+('s_phone', 's_acctbal', 's_nationkey') 31.866908073425293
+('l_tax', 'l_returnflag', 'l_quantity') 6136.521339416504
+('c_address', 'c_phone', 'c_acctbal') 259.21809673309326
+('s_name', 's_phone', 's_address') 46.06151580810547
+('l_extendedprice', 'l_shipmode', 'l_shipinstruct') 19316.372632980347
+('l_discount', 'l_returnflag', 'l_quantity') 5290.683627128601
+('l_shipdate', 'l_quantity', 'l_returnflag') 3961.9990587234497
+('l_returnflag', 'l_linestatus', 'l_quantity') 6490.7066822052
+('l_quantity', 'l_linestatus', 'l_extendedprice') 6401.356220245361
+('c_phone', 'c_nationkey', 'c_name') 333.67812633514404
+('l_shipinstruct', 'l_quantity', 'l_discount') 15021.045446395874
+('c_nationkey', 'c_name', 'c_address') 585.2433443069458
+('l_shipinstruct', 'l_quantity') 8651.101350784302
+('s_address', 's_name', 's_acctbal') 16.78621768951416
+('l_receiptdate', 'l_commitdate', 'l_shipdate') 2587.0693922042847
+('l_shipmode', 'l_extendedprice', 'l_shipinstruct') 18403.289318084717
+('l_shipdate', 'l_returnflag', 'l_extendedprice') 5298.496723175049
+('l_extendedprice', 'l_partkey', 'l_quantity') 7607.78284072876
+('l_extendedprice', 'l_shipdate', 'l_linestatus') 5705.481171607971
+('l_tax', 'l_extendedprice', 'l_returnflag') 6868.306040763855
+('c_phone', 'c_address', 'c_name') 462.88490295410156
+('l_extendedprice', 'l_shipmode', 'l_partkey') 16557.87980556488
+('l_shipinstruct', 'l_shipmode', 'l_quantity') 14744.327783584595
+('l_returnflag',) 1890.802264213562
+('o_orderdate', 'o_custkey', 'o_shippriority') 906.806230545044
+('s_acctbal', 's_address', 's_phone') 29.3809175491333
+('p_brand', 'p_size') 184.32819843292236
+('l_shipmode', 'l_discount', 'l_extendedprice') 17728.765726089478
+('n_regionkey',) 1.0514259338378906
+('l_extendedprice', 'l_shipdate') 4280.177593231201
+('p_brand', 'p_type') 350.36325454711914
+('l_shipdate', 'l_quantity', 'l_discount') 4325.011253356934
+('l_shipdate', 'l_commitdate', 'l_shipmode') 6468.069791793823
+('l_shipdate', 'l_tax', 'l_quantity') 5536.90505027771
+('l_shipmode', 'l_extendedprice', 'l_partkey') 13899.316310882568
+('o_custkey', 'o_shippriority', 'o_orderdate') 1138.8747692108154
+('s_acctbal', 's_nationkey') 17.818927764892578
+('l_tax', 'l_quantity', 'l_shipdate') 6206.698417663574
+('l_discount', 'l_extendedprice', 'l_returnflag') 5965.616464614868
+('p_container', 'p_brand') 238.77382278442383
+('s_nationkey', 's_acctbal') 15.379905700683594
+('l_shipdate', 'l_linestatus', 'l_returnflag') 3033.739686012268
+('l_shipinstruct', 'l_quantity', 'l_shipmode') 15190.480351448059
+('l_commitdate', 'l_receiptdate') 1918.7089204788208
+('c_acctbal', 'c_name', 'c_address') 718.2424068450928
+('l_quantity', 'l_tax', 'l_linestatus') 4877.72011756897
+('l_extendedprice', 'l_discount', 'l_suppkey') 17210.000872612
+('l_shipmode', 'l_shipinstruct') 9970.391988754272
+('c_name', 'c_acctbal', 'c_nationkey') 606.1865091323853
+('s_acctbal', 's_phone', 's_name') 50.00805854797363
+('l_tax', 'l_extendedprice', 'l_discount') 7110.562086105347
+('l_discount',) 2696.1894035339355
+('c_address', 'c_nationkey', 'c_acctbal') 225.55196285247803
+('l_quantity', 'l_linestatus') 3324.5067596435547
+('c_nationkey',) 61.60080432891846
+('l_commitdate', 'l_shipmode', 'l_receiptdate') 9347.64814376831
+('l_shipmode', 'l_partkey') 6330.202579498291
+('l_quantity', 'l_returnflag', 'l_tax') 5203.944206237793
+('c_name',) 548.911452293396
+('s_name', 's_acctbal', 's_address') 41.889190673828125
+('p_size', 'p_brand', 'p_container') 299.08549785614014
+('p_type', 'p_size', 'p_mfgr') 393.1772708892822
+('l_extendedprice', 'l_quantity', 'l_linestatus') 7804.607391357422
+('c_phone', 'c_name', 'c_nationkey') 394.05977725982666
+('l_discount', 'l_suppkey') 7209.985136985779
+('l_shipinstruct', 'l_partkey', 'l_shipmode') 12734.511852264404
+('l_tax', 'l_linestatus', 'l_shipdate') 5021.636605262756
+('s_phone', 's_acctbal', 's_name') 28.757810592651367
+('c_phone', 'c_acctbal', 'c_address') 327.59547233581543
+('s_name', 's_phone') 44.69442367553711
+('l_suppkey', 'l_discount', 'l_shipdate') 7318.311452865601
+('l_linestatus', 'l_extendedprice', 'l_tax') 6958.143472671509
+('l_discount', 'l_quantity', 'l_suppkey') 12498.827457427979
+('l_tax', 'l_shipdate', 'l_extendedprice') 6292.939066886902
+('l_shipmode',) 6164.050340652466
+('l_shipdate', 'l_suppkey', 'l_discount') 6029.358267784119
+('p_size', 'p_mfgr', 'p_type') 394.59168910980225
+('l_partkey', 'l_suppkey', 'l_quantity') 6106.119871139526
+('c_nationkey', 'c_address', 'c_phone') 293.032169342041
+('l_discount', 'l_shipdate', 'l_suppkey') 11502.412557601929
+('l_commitdate',) 1912.7484560012817
+('l_tax', 'l_quantity', 'l_extendedprice') 6580.479860305786
+('ps_availqty', 'ps_supplycost') 529.7353267669678
+('s_phone', 's_acctbal') 22.64690399169922
+('p_size', 'p_container', 'p_brand') 261.24632358551025
+('l_discount', 'l_returnflag', 'l_shipdate') 5957.140564918518
+('c_address', 'c_name', 'c_phone') 358.2181930541992
+('l_discount', 'l_quantity', 'l_returnflag') 5697.082877159119
+('l_returnflag', 'l_linestatus', 'l_shipdate') 3463.709592819214
+('l_discount', 'l_suppkey', 'l_shipdate') 10738.520860671997
+('c_acctbal', 'c_name') 883.5793733596802
+('s_name', 's_address', 's_nationkey') 48.15113544464111
+('c_nationkey', 'c_acctbal', 'c_address') 547.919750213623
+('l_discount', 'l_extendedprice', 'l_shipmode') 18363.4694814682
+('p_brand', 'p_size', 'p_type') 548.5832691192627
+('l_quantity', 'l_tax', 'l_returnflag') 6020.979523658752
+('l_shipdate', 'l_linestatus') 2246.082067489624
+('o_orderdate', 'o_orderpriority') 1270.7663774490356
+('l_returnflag', 'l_shipdate', 'l_tax') 4485.577344894409
+('o_totalprice', 'o_orderdate', 'o_custkey') 3210.224747657776
+('l_partkey', 'l_extendedprice', 'l_suppkey') 13576.09498500824
+('l_shipdate', 'l_shipmode', 'l_receiptdate') 7371.32203578949
+('l_partkey', 'l_shipmode', 'l_discount') 11807.093143463135
+('s_nationkey', 's_address', 's_name') 16.509652137756348
+('o_shippriority', 'o_custkey', 'o_orderdate') 1010.0650787353516
+('l_receiptdate', 'l_suppkey') 3256.471276283264
+('c_acctbal', 'c_nationkey', 'c_name') 752.7139186859131
+('l_quantity', 'l_returnflag') 3400.470972061157
+('l_shipdate', 'l_discount', 'l_linestatus') 4850.794076919556
+('s_acctbal', 's_name') 73.9891529083252
+('l_shipmode', 'l_shipdate', 'l_commitdate') 9621.477723121643
+('l_linestatus', 'l_returnflag', 'l_extendedprice') 5482.5475215911865
+('l_extendedprice', 'l_shipdate', 'l_partkey') 6344.175934791565
+('c_name', 'c_phone', 'c_acctbal') 647.5125551223755
+('l_partkey', 'l_quantity', 'l_shipdate') 4572.7198123931885
+('l_discount', 'l_tax', 'l_quantity') 5548.072457313538
+('l_quantity', 'l_discount', 'l_shipdate') 4889.934778213501
+('l_extendedprice', 'l_tax') 6235.300421714783
+('l_tax', 'l_linestatus', 'l_extendedprice') 6299.383997917175
+('l_extendedprice', 'l_shipinstruct', 'l_partkey') 16236.943364143372
+('l_shipmode', 'l_quantity', 'l_discount') 13071.160078048706
+('l_quantity', 'l_tax', 'l_discount') 6953.927278518677
+('p_mfgr', 'p_type', 'p_size') 521.4757919311523
+('l_returnflag', 'l_tax', 'l_linestatus') 4904.594421386719
+('l_discount', 'l_linestatus', 'l_returnflag') 4867.93315410614
+('o_totalprice', 'o_custkey') 2845.055341720581
+('s_address', 's_name', 's_nationkey') 16.322016716003418
+('c_address', 'c_acctbal', 'c_name') 239.21442031860352
+('l_suppkey', 'l_discount', 'l_extendedprice') 14639.49716091156
+('l_partkey', 'l_shipinstruct', 'l_extendedprice') 13914.967894554138
+('l_returnflag', 'l_discount', 'l_quantity') 5160.6374979019165
+('l_discount', 'l_shipmode', 'l_quantity') 15628.623247146606
+('l_suppkey', 'l_extendedprice', 'l_partkey') 10980.72624206543
+('s_address',) 14.89114761352539
+('l_commitdate', 'l_shipmode') 6154.037952423096
+('l_quantity', 'l_discount') 5028.814792633057
+('l_quantity', 'l_shipmode', 'l_discount') 13515.044927597046
+('c_name', 'c_nationkey', 'c_phone') 627.4664402008057
+('l_extendedprice', 'l_partkey', 'l_shipinstruct') 15784.551858901978
+('l_extendedprice', 'l_shipinstruct', 'l_shipmode') 19259.075045585632
+('l_discount', 'l_returnflag', 'l_extendedprice') 6906.554341316223
+('l_quantity', 'l_shipdate', 'l_suppkey') 10729.371786117554
+('s_name', 's_nationkey', 's_address') 41.87953472137451
+('l_partkey', 'l_extendedprice', 'l_discount') 5655.478000640869
+('l_discount', 'l_suppkey', 'l_extendedprice') 16810.336589813232
+('s_nationkey', 's_address', 's_acctbal') 15.147209167480469
+('l_shipinstruct', 'l_partkey', 'l_quantity') 13092.196583747864
+('c_name', 'c_phone', 'c_address') 559.2966079711914
+('l_returnflag', 'l_quantity', 'l_tax') 4792.901039123535
+('r_name',) 1.1980533599853516
+('l_discount', 'l_shipinstruct', 'l_shipmode') 16056.979298591614
+('l_shipinstruct', 'l_partkey') 6657.924652099609
+('l_shipmode', 'l_quantity') 10213.003993034363
+('c_name', 'c_address', 'c_phone') 659.6359014511108
+('l_tax', 'l_extendedprice', 'l_quantity') 7142.699718475342
+('s_nationkey', 's_name', 's_address') 44.99506950378418
+('l_shipdate', 'l_discount', 'l_suppkey') 8879.786968231201
+('l_quantity', 'l_shipdate', 'l_returnflag') 5667.008399963379
+('c_address', 'c_phone', 'c_name') 253.08716297149658
+('l_quantity',) 2601.8729209899902
+('l_shipdate', 'l_extendedprice', 'l_suppkey') 12492.778062820435
+('l_quantity', 'l_extendedprice', 'l_shipinstruct') 19088.950276374817
+('l_commitdate', 'l_receiptdate', 'l_shipdate') 3466.485381126404
+('l_shipinstruct', 'l_shipmode', 'l_extendedprice') 16880.405068397522
+('l_discount', 'l_partkey', 'l_suppkey') 11270.866990089417
+('l_shipdate', 'l_discount', 'l_returnflag') 4044.1290140151978
+('l_shipdate', 'l_commitdate', 'l_receiptdate') 3040.633797645569
+('p_size', 'p_mfgr') 166.38505458831787
+('l_quantity', 'l_shipmode') 10778.039574623108
+('o_orderdate', 'o_totalprice', 'o_custkey') 2868.5832023620605
+('l_shipdate', 'l_partkey', 'l_quantity') 3179.083228111267
+('l_discount', 'l_extendedprice', 'l_quantity') 8174.248099327087
+('l_partkey', 'l_suppkey', 'l_shipdate') 4834.4210386276245
+('l_partkey', 'l_quantity', 'l_extendedprice') 5820.791006088257
+('l_shipdate', 'l_tax', 'l_extendedprice') 5935.307145118713
+('l_shipdate', 'l_linestatus', 'l_quantity') 5175.752282142639
+('l_partkey', 'l_discount', 'l_shipmode') 10170.068860054016
+('l_quantity', 'l_discount', 'l_extendedprice') 7679.973840713501
+('l_returnflag', 'l_discount', 'l_linestatus') 5514.655590057373
+('l_returnflag', 'l_extendedprice', 'l_linestatus') 5537.289500236511
+('l_partkey', 'l_shipdate', 'l_extendedprice') 4763.013243675232
+('l_quantity', 'l_extendedprice', 'l_partkey') 7730.0156354904175
+('l_suppkey', 'l_shipdate', 'l_discount') 6091.57657623291
+('s_name', 's_acctbal', 's_phone') 42.531728744506836
+('l_extendedprice', 'l_quantity', 'l_shipmode') 19327.043414115906
+('l_discount', 'l_returnflag', 'l_tax') 4897.785782814026
+('l_quantity', 'l_shipdate', 'l_discount') 5572.966456413269
+('l_receiptdate', 'l_commitdate') 2852.7798652648926
+('l_returnflag', 'l_linestatus', 'l_tax') 5483.473300933838
+('l_suppkey', 'l_quantity', 'l_discount') 10411.243677139282
+('l_returnflag', 'l_discount') 4515.28525352478
+('l_shipdate', 'l_suppkey', 'l_quantity') 6631.166458129883
+('l_suppkey', 'l_discount') 5567.229866981506
+('l_shipdate', 'l_returnflag', 'l_linestatus') 3473.4857082366943
+('l_shipmode', 'l_shipinstruct', 'l_quantity') 15029.825687408447
+('s_name', 's_nationkey') 42.031049728393555
+('l_linestatus', 'l_shipdate', 'l_quantity') 4773.285865783691
+('c_phone', 'c_acctbal', 'c_nationkey') 416.25678539276123
+('l_commitdate', 'l_receiptdate', 'l_suppkey') 5471.113681793213
+('o_shippriority',) 674.5672225952148
+('l_quantity', 'l_returnflag', 'l_shipdate') 4535.580992698669
+('s_phone', 's_name', 's_nationkey') 22.334575653076172
+('s_phone', 's_nationkey', 's_name') 21.465063095092773
+('s_name', 's_address', 's_acctbal') 41.49222373962402
+('c_name', 'c_nationkey', 'c_acctbal') 536.2476110458374
+('l_extendedprice', 'l_shipdate', 'l_quantity') 5963.843941688538
+('c_phone', 'c_acctbal') 309.8783493041992
+('l_returnflag', 'l_tax', 'l_discount') 6521.549940109253
+('l_shipdate', 'l_shipmode') 5734.397411346436
+('o_shippriority', 'o_orderdate', 'o_custkey') 1176.9862174987793
+('l_shipinstruct', 'l_extendedprice', 'l_discount') 18118.85952949524
+('l_quantity', 'l_extendedprice', 'l_tax') 6948.962092399597
+('l_extendedprice', 'l_shipinstruct', 'l_quantity') 19501.821041107178
+('p_container', 'p_brand', 'p_size') 333.2226276397705
+('l_receiptdate',) 2204.041004180908
+('c_nationkey', 'c_acctbal', 'c_name') 856.8516969680786
+('l_suppkey', 'l_partkey', 'l_discount') 7616.2978410720825
+('l_shipdate', 'l_commitdate') 2102.7573347091675
+('l_partkey', 'l_shipinstruct') 5402.353525161743
+('l_shipmode', 'l_commitdate', 'l_receiptdate') 10190.725207328796
+('c_name', 'c_address', 'c_acctbal') 644.6292400360107
+('o_shippriority', 'o_orderdate') 687.1145963668823
+('l_linestatus', 'l_tax', 'l_shipdate') 4521.447777748108
+('l_partkey', 'l_suppkey', 'l_extendedprice') 9291.874885559082
+('l_shipmode', 'l_partkey', 'l_quantity') 12366.21618270874
+('l_discount', 'l_shipinstruct', 'l_quantity') 15281.969666481018
+('l_suppkey', 'l_commitdate') 3092.576265335083
+('p_type', 'p_size', 'p_brand') 364.1737699508667
+('l_tax', 'l_shipdate') 3596.5380668640137
+('s_address', 's_phone') 15.607714653015137
+('l_quantity', 'l_suppkey', 'l_discount') 13554.212093353271
+('l_extendedprice', 'l_discount', 'l_linestatus') 5723.736643791199
+('l_quantity', 'l_shipinstruct', 'l_discount') 15739.500880241394
+('s_nationkey', 's_phone', 's_acctbal') 24.501562118530273
+('c_nationkey', 'c_phone') 359.06994342803955
+('s_name', 's_phone', 's_nationkey') 44.47746276855469
+('s_nationkey', 's_name') 47.83737659454346
+('l_discount', 'l_partkey', 'l_shipmode') 13383.078217506409
+('l_quantity', 'l_linestatus', 'l_returnflag') 4985.205292701721
+('l_extendedprice', 'l_linestatus', 'l_tax') 6198.367714881897
+('l_tax', 'l_discount', 'l_shipdate') 5281.046509742737
+('l_shipmode', 'l_shipdate') 8218.826293945312
+('c_name', 'c_nationkey', 'c_address') 537.8764867782593
+('l_extendedprice', 'l_tax', 'l_shipdate') 5953.304052352905
+('c_phone', 'c_address') 331.6730260848999
+('s_acctbal', 's_phone', 's_address') 32.500386238098145
+('l_shipinstruct', 'l_discount', 'l_shipmode') 15910.011887550354
+('o_orderpriority', 'o_orderdate') 1557.6636791229248
+('l_shipmode', 'l_shipdate', 'l_receiptdate') 9126.330256462097
+('c_address', 'c_phone') 324.072003364563
+('s_phone', 's_nationkey', 's_acctbal') 32.882094383239746
+('o_custkey', 'o_orderdate', 'o_shippriority') 1130.8460235595703
+('c_name', 'c_phone') 679.3785095214844
+('l_partkey', 'l_discount', 'l_quantity') 5130.774021148682
+('l_partkey', 'l_shipmode') 4850.569367408752
+('s_phone',) 20.467519760131836
+('l_commitdate', 'l_shipdate', 'l_shipmode') 5615.438222885132
+('l_quantity', 'l_returnflag', 'l_extendedprice') 7661.178350448608
+('s_nationkey', 's_acctbal', 's_name') 57.297587394714355
+('l_extendedprice', 'l_suppkey', 'l_quantity') 16129.30691242218
+('l_tax', 'l_shipdate', 'l_linestatus') 5226.444602012634
+('l_shipinstruct', 'l_quantity', 'l_partkey') 11663.625836372375
+('l_discount', 'l_linestatus') 4216.262459754944
+('p_type', 'p_mfgr') 410.2669954299927
+('l_discount', 'l_shipmode', 'l_shipinstruct') 13144.367456436157
+('p_brand', 'p_container', 'p_size') 448.0161666870117
+('l_discount', 'l_extendedprice', 'l_shipdate') 7774.67155456543
+('l_quantity', 'l_shipinstruct', 'l_shipmode') 14900.721430778503
+('p_size', 'p_type') 349.6798276901245
+('l_returnflag', 'l_extendedprice', 'l_discount') 6869.130730628967
+('s_name', 's_nationkey', 's_phone') 42.27590560913086
+('l_quantity', 'l_partkey', 'l_discount') 5101.140141487122
+('c_name', 'c_phone', 'c_nationkey') 529.2055606842041
+('l_quantity', 'l_linestatus', 'l_discount') 5819.646000862122
+('l_discount', 'l_quantity', 'l_linestatus') 6311.635136604309
+('l_linestatus', 'l_discount', 'l_returnflag') 4825.981974601746
+('l_suppkey', 'l_commitdate', 'l_receiptdate') 3959.028959274292
+('l_linestatus', 'l_extendedprice', 'l_returnflag') 7021.391034126282
+('o_custkey', 'o_totalprice') 1431.4547777175903
+('s_nationkey', 's_name', 's_phone') 57.13164806365967
+('l_discount', 'l_shipdate', 'l_linestatus') 4852.667927742004
+('p_mfgr', 'p_size', 'p_type') 456.6847085952759
+('l_shipdate', 'l_returnflag', 'l_discount') 3983.2793474197388
+('l_linestatus', 'l_tax', 'l_extendedprice') 6711.093068122864
+('l_discount', 'l_shipmode', 'l_partkey') 12713.192462921143
+('o_custkey', 'o_orderdate') 762.0753049850464
+('l_tax', 'l_extendedprice') 5727.816939353943
+('l_linestatus', 'l_quantity') 4530.742406845093
+('l_shipdate', 'l_quantity', 'l_partkey') 3872.4361658096313
+('l_shipinstruct',) 5050.559043884277
+('l_suppkey', 'l_shipdate', 'l_quantity') 7058.293342590332
+('s_phone', 's_name') 34.76858139038086
+('l_receiptdate', 'l_commitdate', 'l_suppkey') 5056.501150131226
+('l_extendedprice', 'l_discount', 'l_returnflag') 6102.367877960205
+('l_shipinstruct', 'l_partkey', 'l_extendedprice') 16253.17633152008
+('l_shipdate', 'l_quantity') 3127.2248029708862
+('l_returnflag', 'l_quantity', 'l_shipdate') 4700.752019882202
+('l_tax', 'l_discount', 'l_extendedprice') 8350.465059280396
+('l_shipmode', 'l_extendedprice') 11786.217331886292
+('l_extendedprice', 'l_linestatus', 'l_quantity') 7487.174153327942
+('l_quantity', 'l_partkey', 'l_shipmode') 12064.313769340515
+('s_name', 's_acctbal', 's_nationkey') 47.76191711425781
+('l_suppkey', 'l_quantity') 7021.328449249268
+('l_returnflag', 'l_shipdate', 'l_extendedprice') 5457.4134349823
+('l_discount', 'l_extendedprice', 'l_shipinstruct') 19046.865463256836
+('n_name',) 1.0374784469604492
+('l_partkey',) 1931.193470954895
+('l_linestatus', 'l_extendedprice', 'l_discount') 6497.403144836426
+('l_shipdate', 'l_discount', 'l_quantity') 5435.989260673523
+('l_commitdate', 'l_shipdate') 2184.527277946472
+('c_nationkey', 'c_acctbal') 143.90850067138672
+('l_extendedprice', 'l_suppkey') 11048.949837684631
+('l_shipdate', 'l_receiptdate', 'l_shipmode') 6840.399742126465
+('s_name', 's_acctbal') 40.93575477600098
+('p_mfgr',) 92.01788902282715
+('s_acctbal', 's_nationkey', 's_phone') 35.87508201599121
+('l_shipdate', 'l_partkey', 'l_extendedprice') 4309.520244598389
+('l_extendedprice', 'l_returnflag', 'l_linestatus') 5667.787790298462
+('l_discount', 'l_partkey', 'l_quantity') 6401.722073554993
+('l_shipdate', 'l_receiptdate', 'l_commitdate') 3036.032557487488
+('l_returnflag', 'l_discount', 'l_tax') 4903.973817825317
+('l_tax', 'l_shipdate', 'l_returnflag') 4511.654853820801
+('l_discount', 'l_extendedprice', 'l_partkey') 7619.3883419036865
+('l_discount', 'l_returnflag') 3418.638229370117
+('l_suppkey', 'l_extendedprice', 'l_shipdate') 11823.14383983612
+('l_shipdate', 'l_linestatus', 'l_extendedprice') 5804.6358823776245
+('c_address', 'c_acctbal') 228.7154197692871
+('l_extendedprice', 'l_returnflag') 4877.085208892822
+('o_orderdate', 'o_custkey', 'o_totalprice') 1342.8853750228882
+('l_returnflag', 'l_tax', 'l_quantity') 5687.286138534546
+('l_shipdate', 'l_quantity', 'l_tax') 5610.068917274475
+('l_shipinstruct', 'l_discount', 'l_quantity') 14643.758773803711
+('l_tax', 'l_returnflag', 'l_shipdate') 5398.6265659332275
+('l_quantity', 'l_tax', 'l_shipdate') 4919.222831726074
+('l_tax', 'l_quantity', 'l_returnflag') 5593.90652179718
+('l_commitdate', 'l_shipmode', 'l_shipdate') 8770.251393318176
+('s_phone', 's_name', 's_acctbal') 22.901535034179688
+('c_acctbal', 'c_phone', 'c_nationkey') 458.279013633728
+('o_custkey', 'o_totalprice', 'o_orderdate') 1230.420470237732
+('l_suppkey', 'l_partkey', 'l_quantity') 5896.142840385437
+('l_linestatus', 'l_quantity', 'l_shipdate') 5607.4970960617065
+('p_size', 'p_brand') 140.8402919769287
+('l_partkey', 'l_quantity') 3706.5231800079346
+('l_discount', 'l_shipdate', 'l_returnflag') 4446.935057640076
+('l_shipdate', 'l_suppkey', 'l_partkey') 4006.002902984619
+('l_shipmode', 'l_shipinstruct', 'l_extendedprice') 17544.787883758545
+('l_quantity', 'l_shipdate') 4130.761027336121
+('c_nationkey', 'c_address') 263.7157440185547
+('l_quantity', 'l_shipdate', 'l_linestatus') 5833.729028701782
+('l_linestatus', 'l_shipdate', 'l_extendedprice') 5515.637159347534
+('l_shipmode', 'l_shipinstruct', 'l_partkey') 12077.107310295105
+('l_partkey', 'l_discount', 'l_shipdate') 4304.263353347778
+('l_tax',) 2684.7164630889893
+('l_extendedprice', 'l_partkey', 'l_shipdate') 5644.2331075668335
+('l_returnflag', 'l_linestatus') 3688.398838043213
+('p_type', 'p_mfgr', 'p_size') 483.4451675415039
+('l_tax', 'l_shipdate', 'l_discount') 5822.202920913696
+('l_receiptdate', 'l_shipmode', 'l_commitdate') 7046.748757362366
+('p_container',) 166.1924123764038
+('c_phone',) 382.50625133514404
+('l_extendedprice', 'l_discount') 6565.404295921326
+('o_custkey',) 988.2121086120605
+('l_extendedprice', 'l_suppkey', 'l_shipdate') 13645.418405532837
+('l_returnflag', 'l_quantity', 'l_extendedprice') 7220.529198646545
+('l_extendedprice', 'l_discount', 'l_shipmode') 19610.655903816223
+('l_extendedprice', 'l_quantity', 'l_shipdate') 5984.229326248169
+('l_shipdate', 'l_extendedprice', 'l_linestatus') 5350.792169570923
+('p_type', 'p_size') 351.28211975097656
+('l_shipmode', 'l_partkey', 'l_shipinstruct') 11988.336443901062
+('l_tax', 'l_quantity', 'l_discount') 5850.788712501526
+('s_name', 's_phone', 's_acctbal') 50.90343952178955
+('p_size', 'p_type', 'p_mfgr') 491.35005474090576
+('l_shipdate', 'l_receiptdate') 2860.910177230835
+('l_discount', 'l_extendedprice', 'l_tax') 7254.911661148071
+('l_shipdate', 'l_linestatus', 'l_tax') 3884.974479675293
+('l_tax', 'l_linestatus', 'l_returnflag') 5709.131598472595
+('l_shipmode', 'l_quantity', 'l_shipinstruct') 14418.574810028076
+('l_suppkey', 'l_receiptdate') 4273.824214935303
+('p_size', 'p_brand', 'p_type') 517.7406072616577
+('l_quantity', 'l_extendedprice', 'l_shipdate') 6733.689785003662
+('c_phone', 'c_nationkey') 306.98883533477783
+('c_phone', 'c_nationkey', 'c_acctbal') 305.370569229126
+('l_shipmode', 'l_partkey', 'l_extendedprice') 15740.003228187561
+('l_shipmode', 'l_receiptdate', 'l_commitdate') 8320.25694847107
+('c_phone', 'c_name') 417.952299118042
+('l_discount', 'l_shipinstruct', 'l_partkey') 14023.526072502136
+('l_linestatus', 'l_shipdate') 2810.6459379196167
+('l_discount', 'l_quantity', 'l_partkey') 5894.691109657288
+('l_returnflag', 'l_extendedprice', 'l_quantity') 6861.693501472473
+('l_quantity', 'l_shipinstruct') 9693.601369857788
+('l_quantity', 'l_shipmode', 'l_shipinstruct') 15156.105041503906
+('c_name', 'c_address', 'c_nationkey') 546.6803312301636
+('o_orderpriority',) 1159.6908569335938
+('c_phone', 'c_address', 'c_acctbal') 431.0576915740967
+('l_tax', 'l_returnflag', 'l_extendedprice') 7529.496788978577
+('l_discount', 'l_shipmode') 9192.777633666992
+('l_linestatus', 'l_shipdate', 'l_tax') 5708.27579498291
+('l_partkey', 'l_discount', 'l_shipinstruct') 11204.58447933197
+('l_shipmode', 'l_quantity', 'l_partkey') 13073.722124099731
+('s_acctbal', 's_address', 's_nationkey') 24.512290954589844
+('c_acctbal', 'c_phone') 438.66491317749023
+('l_partkey', 'l_extendedprice', 'l_shipinstruct') 15008.388042449951
+('c_nationkey', 'c_phone', 'c_acctbal') 329.1444778442383
+('l_linestatus', 'l_returnflag', 'l_discount') 4262.5263929367065
+('l_returnflag', 'l_linestatus', 'l_extendedprice') 5454.845428466797
+('l_extendedprice', 'l_linestatus', 'l_shipdate') 6990.703701972961
+('l_linestatus', 'l_quantity', 'l_extendedprice') 6177.682638168335
+('l_shipdate', 'l_returnflag', 'l_quantity') 3981.2480211257935
+('l_extendedprice', 'l_quantity', 'l_shipinstruct') 19220.99769115448
+('l_tax', 'l_linestatus', 'l_discount') 6557.6019287109375
+('l_shipinstruct', 'l_extendedprice') 12719.131588935852
+('l_discount', 'l_quantity', 'l_shipmode') 16467.6251411438
+('l_quantity', 'l_partkey') 3679.626941680908
+('l_quantity', 'l_shipmode', 'l_partkey') 13500.35297870636
+('c_nationkey', 'c_address', 'c_acctbal') 215.68560600280762
+('l_partkey', 'l_discount', 'l_extendedprice') 6143.43273639679
+('c_phone', 'c_nationkey', 'c_address') 433.7118864059448
+('l_extendedprice', 'l_shipdate', 'l_tax') 7053.841352462769
+('c_acctbal', 'c_nationkey', 'c_phone') 555.1905632019043
+('l_commitdate', 'l_shipdate', 'l_receiptdate') 2707.3720693588257
+('l_partkey', 'l_shipinstruct', 'l_discount') 11881.565928459167
+('l_partkey', 'l_quantity', 'l_suppkey') 7989.910125732422
+('c_address', 'c_name', 'c_acctbal') 227.10156440734863
+('l_quantity', 'l_discount', 'l_suppkey') 14205.801606178284
+('l_extendedprice', 'l_returnflag', 'l_discount') 6183.181047439575
+('l_shipmode', 'l_discount', 'l_quantity') 15191.06924533844
+('p_size',) 80.31344413757324
+('l_extendedprice', 'l_suppkey', 'l_partkey') 15054.62646484375
+('l_partkey', 'l_shipdate', 'l_suppkey') 4083.567500114441
+('l_extendedprice', 'l_quantity', 'l_partkey') 7260.072588920593
+('p_type',) 316.55120849609375
+('l_shipdate', 'l_extendedprice', 'l_returnflag') 5386.674761772156
+('l_linestatus', 'l_discount', 'l_quantity') 5009.317636489868
+('l_shipdate', 'l_tax', 'l_returnflag') 4373.492360115051
+('s_address', 's_acctbal', 's_phone') 25.490880012512207
+('l_quantity', 'l_discount', 'l_returnflag') 6610.302805900574
+('c_nationkey', 'c_phone', 'c_address') 358.0073118209839
+('l_partkey', 'l_extendedprice', 'l_shipmode') 14675.613641738892
+('l_receiptdate', 'l_shipmode') 5686.205983161926
+('c_address', 'c_acctbal', 'c_phone') 229.81500625610352
+('c_nationkey', 'c_name', 'c_phone') 578.8710117340088
+('l_partkey', 'l_shipdate') 2213.9945030212402
+('p_type', 'p_brand') 311.4856481552124
+('l_linestatus', 'l_extendedprice') 4933.452606201172
+('l_linestatus', 'l_quantity', 'l_tax') 6494.863867759705
+('l_extendedprice', 'l_discount', 'l_quantity') 6914.970278739929
+('l_partkey', 'l_shipinstruct', 'l_shipmode') 11662.401795387268
+('l_shipinstruct', 'l_shipmode', 'l_discount') 13591.741442680359
+('l_quantity', 'l_tax') 5288.189768791199
+('s_acctbal', 's_nationkey', 's_address') 34.29996967315674
+('p_name',) 440.4529333114624
+('l_suppkey', 'l_shipdate', 'l_partkey') 3638.6603116989136
+('s_acctbal', 's_phone') 28.92124652862549
+('s_nationkey', 's_phone', 's_name') 20.6681489944458
+('l_shipdate', 'l_extendedprice') 4111.4689111709595
+('l_shipdate', 'l_extendedprice', 'l_discount') 5613.5536432266235
+('s_nationkey', 's_address') 15.846729278564453
+('l_shipdate', 'l_partkey') 2244.516968727112
+('l_quantity', 'l_shipdate', 'l_partkey') 4329.707503318787
+('l_partkey', 'l_quantity', 'l_discount') 5304.875612258911
+('l_shipdate', 'l_tax', 'l_discount') 5325.5966901779175
+('l_discount', 'l_partkey', 'l_shipinstruct') 11938.128471374512
+('l_suppkey', 'l_quantity', 'l_partkey') 9593.713164329529
+('c_phone', 'c_acctbal', 'c_name') 348.1893539428711
+('o_orderdate', 'o_shippriority') 503.14056873321533
+('l_suppkey', 'l_partkey') 2841.812252998352
+('l_extendedprice', 'l_quantity', 'l_tax') 6574.894189834595
+('l_partkey', 'l_shipdate', 'l_discount') 4076.796054840088
+('l_commitdate', 'l_suppkey', 'l_receiptdate') 5163.535356521606
+('c_acctbal', 'c_phone', 'c_address') 484.9313497543335
+('l_discount', 'l_linestatus', 'l_tax') 5210.723519325256
+('c_address', 'c_nationkey', 'c_name') 235.2522611618042
+('l_discount', 'l_tax', 'l_shipdate') 4895.251035690308
+('l_shipdate', 'l_discount', 'l_partkey') 4640.645265579224
+('c_acctbal', 'c_address', 'c_phone') 419.5812940597534
+('l_partkey', 'l_shipmode', 'l_quantity') 10714.973211288452
+('l_tax', 'l_shipdate', 'l_quantity') 5189.489006996155
+('c_acctbal', 'c_name', 'c_phone') 767.7602767944336
+('l_discount', 'l_quantity') 5269.542694091797
+('s_acctbal', 's_address', 's_name') 40.34554958343506
+('s_nationkey', 's_acctbal', 's_address') 38.2533073425293
+('l_returnflag', 'l_discount', 'l_shipdate') 5016.008496284485
+('l_tax', 'l_linestatus') 3303.3809661865234
+('l_quantity', 'l_partkey', 'l_shipdate') 4138.127326965332
+('s_acctbal', 's_name', 's_address') 53.71963977813721
+('n_regionkey', 'n_name') 0.8571147918701172
+('l_linestatus', 'l_tax') 3541.824221611023
+('l_shipinstruct', 'l_discount', 'l_partkey') 13574.080228805542
+('c_address', 'c_nationkey') 212.07129955291748
+('l_partkey', 'l_quantity', 'l_shipmode') 11597.044706344604

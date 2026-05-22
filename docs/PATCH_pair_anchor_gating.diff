@@ -1,0 +1,1926 @@
+diff -ruN /mnt/data/AdaSelectPP20260131_orig/adasel/ada_select.py /mnt/data/AdaSelectPP20260131_src/adasel/ada_select.py
+--- /mnt/data/AdaSelectPP20260131_orig/adasel/ada_select.py	2026-01-31 11:28:16.000000000 +0000
++++ /mnt/data/AdaSelectPP20260131_src/adasel/ada_select.py	2026-01-31 04:20:58.160577430 +0000
+@@ -520,75 +520,148 @@
+             idx: IndexKey,
+             prediction: float,
+             observation: float,
++            *,
++            obs_src: str = "",
++            hit_cnt: int = 0,
++            ok_cnt: int = 0,
+     ) -> float:
+-        """
+-        Adaptive lambda based on Trigg-style Tracking Signal.
++        """Adaptive lambda via Trigg-style Tracking Signal (TS).
++
++        This implementation is designed for AdaSelect++'s "sparse/filtered observation" regime:
+ 
+-        - 我们把 idx_error_smooth 视作“带遗忘因子的 RSFE”（运行和）；
+-        - idx_abs_error_smooth 视作“平滑的平均绝对误差 MAD”；
+-        - TS = |RSFE| / (MAD + eps)，度量“系统性偏差 vs 正常波动”的强度；
+-        - TS 小：误差基本随机波动 → lambda 接近 lambda_max（长记忆）；
+-        - TS 大：误差长时间偏向某一侧 → lambda 接近 lambda_min（短记忆）。
++        1) **Signal gating**: if the observation is uninformative (NO_HIT / ALL_FALLBACK), we do
++           **not** update RSFE/MAD/TS. Instead we gently regress lambda toward alpha_init.
++        2) **Quality weighting**: if only a fraction of hit queries were evaluated successfully,
++           we down-weight the error update by ok_cnt/hit_cnt.
++        3) **MAD floor**: avoid near-zero MAD forcing TS to explode (which pushes lambda to extremes).
++        4) **Noise vs drift thresholding**: adjust TS_low/TS_high based on *error sign consistency*.
++           - frequent sign flips ⇒ noise ⇒ raise thresholds (less reactive)
++           - persistent sign ⇒ drift ⇒ lower thresholds (more reactive)
+         """
+ 
+-        # 1) Cold start：第一次看到这个索引，用 alpha_init
++        # --- Cold start ---
+         if idx not in self.idx_alphas:
+-            # 初始化 RSFE 和 MAD
+-            self.idx_error_smooth[idx] = 0.0  # RSFE_t
+-            self.idx_abs_error_smooth[idx] = 0.0  # MAD_t
+-            self.idx_alphas[idx] = self.alpha_init
+-            return self.alpha_init
+-
+-        # 2) 当前预测误差（带符号）
+-        error = observation - prediction
+-
+-        # 3) 读取历史 RSFE & MAD
+-        old_rsfe = self.idx_error_smooth.get(idx, 0.0)
+-        old_mad = self.idx_abs_error_smooth.get(idx, 0.0)
+-
+-        # 4) 更新 RSFE（运行和 + 轻微遗忘防止爆炸）
+-        # rho 越接近 1，越接近“真·运行和”；可以在 __init__ 里配置 rsfe_decay，缺省 0.99
+-        rho = getattr(self, "rsfe_decay", 0.99)
+-        new_rsfe = rho * old_rsfe + error
+-
+-        # 5) 更新 MAD（平滑平均绝对误差）
+-        beta = getattr(self, "beta_error", 0.2)
+-        new_mad = beta * abs(error) + (1.0 - beta) * old_mad
++            self.idx_error_smooth[idx] = 0.0
++            self.idx_abs_error_smooth[idx] = 0.0
++            self.idx_alphas[idx] = float(self.alpha_init)
++            # per-index sign-consistency state
++            if not hasattr(self, "idx_last_err_sign"):
++                self.idx_last_err_sign = {}
++            if not hasattr(self, "idx_sign_smooth"):
++                self.idx_sign_smooth = {}
++            self.idx_last_err_sign[idx] = 0
++            self.idx_sign_smooth[idx] = 0.5
++            return float(self.alpha_init)
++
++        # --- Signal gating ---
++        # No-hit / all-fallback means: we do not know whether the index helps; treating it as obs=0
++        # would poison TS and push lambda to extremes.
++        if obs_src in ("NO_HIT", "ALL_FALLBACK") or hit_cnt <= 0 or ok_cnt <= 0:
++            prev = float(self.idx_alphas.get(idx, float(self.alpha_init)))
++            regress = float(getattr(self, "ts_gate_regress", 0.05))
++            lam = (1.0 - regress) * prev + regress * float(self.alpha_init)
++            lam = max(self.lambda_min, min(self.lambda_max, lam))
++            self.idx_alphas[idx] = lam
++            try:
++                self._m_stats["ts_gated_updates"] = self._m_stats.get("ts_gated_updates", 0) + 1
++            except Exception:
++                pass
++            return lam
++
++        # --- Quality-weighted error ---
++        w = 1.0
++        if hit_cnt > 0:
++            w = max(0.0, min(1.0, float(ok_cnt) / float(hit_cnt)))
++        error = (observation - prediction) * w
++
++        old_rsfe = float(self.idx_error_smooth.get(idx, 0.0))
++        old_mad = float(self.idx_abs_error_smooth.get(idx, 0.0))
++
++        # RSFE update (EMA-like, bounded)
++        rho = float(getattr(self, "rsfe_decay", 0.99))
++        rho = max(0.0, min(0.9999, rho))
++        new_rsfe = rho * old_rsfe + (1.0 - rho) * error
++
++        # MAD update (EMA)
++        beta = float(getattr(self, "beta_error", 0.2))
++        beta = max(0.0, min(1.0, beta))
++        new_mad = (1.0 - beta) * old_mad + beta * abs(error)
++
++        # MAD floor to prevent TS blow-up
++        scale = max(1.0, abs(prediction), abs(observation))
++        mad_floor_rel = float(getattr(self, "ts_mad_floor_rel", 1e-6))
++        mad_floor_rel = max(0.0, mad_floor_rel)
++        new_mad = max(new_mad, mad_floor_rel * scale)
+ 
+         self.idx_error_smooth[idx] = new_rsfe
+         self.idx_abs_error_smooth[idx] = new_mad
+ 
+-        # 6) 计算 Tracking Signal
+-        eps = 1e-9
+-        if new_mad < eps:
+-            ts = 0.0
++        # --- Noise vs drift via sign consistency ---
++        if not hasattr(self, "idx_last_err_sign"):
++            self.idx_last_err_sign = {}
++        if not hasattr(self, "idx_sign_smooth"):
++            self.idx_sign_smooth = {}
++
++        prev_sign = int(self.idx_last_err_sign.get(idx, 0))
++        sign = 1 if error > 0 else (-1 if error < 0 else 0)
++        same = 0.0
++        if sign != 0 and prev_sign != 0 and sign == prev_sign:
++            same = 1.0
++        sign_decay = float(getattr(self, "ts_sign_decay", 0.9))
++        sign_decay = max(0.0, min(0.9999, sign_decay))
++        prev_smooth = float(self.idx_sign_smooth.get(idx, 0.5))
++        if sign != 0 and prev_sign != 0:
++            smooth = sign_decay * prev_smooth + (1.0 - sign_decay) * same
+         else:
+-            ts = abs(new_rsfe) / (new_mad + eps)
++            # if sign info missing, slowly revert to neutral
++            smooth = sign_decay * prev_smooth + (1.0 - sign_decay) * 0.5
++        self.idx_sign_smooth[idx] = smooth
++        if sign != 0:
++            self.idx_last_err_sign[idx] = sign
++
++        # --- TS and thresholds ---
++        eps = 1e-12
++        ts = abs(new_rsfe) / (new_mad + eps)
++
++        base_low = float(getattr(self, "ts_low", 1.0))
++        base_high = float(getattr(self, "ts_high", 4.0))
++
++        # noise: more sign flips ⇒ raise thresholds (less reactive)
++        # drift: consistent sign ⇒ lower thresholds (more reactive)
++        mult = 1.0
++        if smooth >= 0.8:
++            mult = 0.7
++        elif smooth <= 0.2:
++            mult = 1.4
++        ts_low = max(0.05, base_low * mult)
++        ts_high = max(ts_low + 0.05, base_high * mult)
+ 
+-        # 7) 把 TS 映射到 [lambda_min, lambda_max]
+-        #    TS_low 以下认为“只有噪声”，TS_high 以上认为“强漂移”
+-        #[TS_low, TS_high] = [1, 4] [0.5, 2.0]   或者[0.25, 1.0]
+-        TS_low = getattr(self, "ts_low", 1)
+-        TS_high = getattr(self, "ts_high", 4)
+-        ts_clipped = max(0.0, min(ts, TS_high))
+-
+-        if ts_clipped <= TS_low:
++        ts_clipped = max(0.0, min(ts, ts_high))
++        if ts_clipped <= ts_low:
+             raw_lambda = self.lambda_max
+-        elif ts_clipped >= TS_high:
++        elif ts_clipped >= ts_high:
+             raw_lambda = self.lambda_min
+         else:
+-            # 在 [TS_low, TS_high] 做线性插值
+-            ratio = (ts_clipped - TS_low) / (TS_high - TS_low)
++            ratio = (ts_clipped - ts_low) / (ts_high - ts_low)
+             raw_lambda = self.lambda_max - ratio * (self.lambda_max - self.lambda_min)
+ 
+-        adaptive_lambda = max(self.lambda_min, min(self.lambda_max, raw_lambda))
+-        return adaptive_lambda
++        lam = max(self.lambda_min, min(self.lambda_max, float(raw_lambda)))
++        self.idx_alphas[idx] = lam
++        try:
++            self._m_stats["ts_updates"] = self._m_stats.get("ts_updates", 0) + 1
++        except Exception:
++            pass
++        return lam
+ 
+     def _choose_lambda(
+             self,
+             idx: IndexKey,
+             prediction: float,
+             observation: float,
++            *,
++            obs_src: str = "",
++            hit_cnt: int = 0,
++            ok_cnt: int = 0,
+     ) -> Tuple[float, float, str]:
+         """Choose lambda for EWMA update.
+ 
+@@ -600,13 +673,17 @@
+         policy = str(getattr(self, "lambda_policy", "adaptive")).lower()
+         if policy in ("fixed", "fix", "const", "constant"):
+             # Shadow tracking: still update RSFE/MAD/TS even when not using adaptive lambda.
+-            lam_shadow = self._calculate_adaptive_lambda(idx, prediction, observation)
++            lam_shadow = self._calculate_adaptive_lambda(
++                idx, prediction, observation, obs_src=obs_src, hit_cnt=hit_cnt, ok_cnt=ok_cnt
++            )
+             lam_used = float(self.alpha_init)
+             # clamp just in case
+             lam_used = max(0.0, min(1.0, lam_used))
+             return lam_used, lam_shadow, policy
+         else:
+-            lam_used = self._calculate_adaptive_lambda(idx, prediction, observation)
++            lam_used = self._calculate_adaptive_lambda(
++                idx, prediction, observation, obs_src=obs_src, hit_cnt=hit_cnt, ok_cnt=ok_cnt
++            )
+             return lam_used, lam_used, policy
+ 
+ 
+@@ -759,10 +836,31 @@
+             delta = total_cost - base_total
+ 
+         # 5. Adaptive Update
+-        prev = self.columns_benefit.get(idx_key, 0.0)
++        prev = float(self.columns_benefit.get(idx_key, 0.0))
++
++        # Classify the observation source to diagnose Obs==0 cases.
++        #   NO_HIT: idx_key never matched any query in this round -> delta must be 0 by construction.
++        #   ALL_FALLBACK: idx_key matched some queries but all what-if calls failed -> delta likely 0.
++        #   PARTIAL_FALLBACK: some what-if succeeded, some fell back.
++        #   OK: all matched queries had successful what-if.
++        if hit_cnt <= 0:
++            obs_src = "NO_HIT"
++        elif ok_cnt <= 0:
++            obs_src = "ALL_FALLBACK"
++        elif ok_cnt < hit_cnt:
++            obs_src = "PARTIAL_FALLBACK"
++        else:
++            obs_src = "OK"
+ 
+         # Calculate Lambda (Handle Cold Start internally)
+-        lam_used, lam_shadow, lam_policy = self._choose_lambda(idx_key, prev, delta)
++        lam_used, lam_shadow, lam_policy = self._choose_lambda(
++            idx_key,
++            prev,
++            delta,
++            obs_src=obs_src,
++            hit_cnt=hit_cnt,
++            ok_cnt=ok_cnt,
++        )
+         self.idx_alphas[idx_key] = lam_used
+         self.idx_alphas_shadow[idx_key] = lam_shadow
+ 
+@@ -778,20 +876,6 @@
+         except Exception:
+             pass
+ 
+-        # Classify the observation source to diagnose Obs==0 cases.
+-        #   NO_HIT: idx_key never matched any query in this round -> delta must be 0 by construction.
+-        #   ALL_FALLBACK: idx_key matched some queries but all what-if calls failed -> delta likely 0.
+-        #   PARTIAL_FALLBACK: some what-if succeeded, some fell back.
+-        #   OK: all matched queries had successful what-if.
+-        if hit_cnt <= 0:
+-            obs_src = "NO_HIT"
+-        elif ok_cnt <= 0:
+-            obs_src = "ALL_FALLBACK"
+-        elif ok_cnt < hit_cnt:
+-            obs_src = "PARTIAL_FALLBACK"
+-        else:
+-            obs_src = "OK"
+-
+         logger.debug(
+             "benefit %s: %.4f -> %.4f (Obs=%.4f, Lambda=%.2f, src=%s, hit=%d, ok=%d, fail=%d, policy=%s, shadow=%.2f)",
+             idx_key, prev, new_benefit, delta, curr_lambda, obs_src, hit_cnt, ok_cnt, fail_cnt, str(lam_policy), float(lam_shadow),
+diff -ruN /mnt/data/AdaSelectPP20260131_orig/adaselect_pp/core/generator.py /mnt/data/AdaSelectPP20260131_src/adaselect_pp/core/generator.py
+--- /mnt/data/AdaSelectPP20260131_orig/adaselect_pp/core/generator.py	2026-01-29 23:54:14.000000000 +0000
++++ /mnt/data/AdaSelectPP20260131_src/adaselect_pp/core/generator.py	2026-01-31 04:20:58.161252086 +0000
+@@ -1,758 +1,890 @@
+-from __future__ import annotations
+-
+-import time
+-import math
+-from collections import defaultdict
+-from dataclasses import dataclass
+-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+-
+-from .enumerator import CooccurrenceEnumerator, IndexKey
+-from .ranker import WDCGRanker
+-from .template_extractor import QueryInfo, TemplateExtractor
+-
+-import logging
+-logger = logging.getLogger(__name__)
+-@dataclass
+-class GenerationResult:
+-    query_indexes: List[Set[IndexKey]]
+-    topk_set: Set[IndexKey]
+-    wdcg_score_map: Dict[IndexKey, float]
+-    stats: Dict[str, Any]
+-
+-
+-class TopKSelector:
+-    """Guarded Top-K selector for Phase 0.5 WDCG 2.0.
+-
+-    Key guardrails ("No Irreversible Kill"):
+-      - No prefix-dominance pruning (prevents width-1 killing width-2).
+-      - Seeds are preserved (as long as TopK is not exceeded).
+-      - Width quotas to avoid single-column collapse.
+-      - (J,J) ratio cap to prevent JOB-type mismatch.
+-      - Emergency rescue to satisfy coverage and seed recall.
+-
+-    The selector uses *soft constraints*; when rescue is needed it evicts
+-    low-score items that are non-seed and non-filter first.
+-    """
+-
+-    def __init__(
+-        self,
+-        *,
+-        cap_table_family: int = 5,
+-        min_width2_ratio: float = 0.40,
+-        max_jj_ratio: float = 0.30,
+-    ) -> None:
+-        self.cap_table_family = int(cap_table_family)
+-        self.min_width2_ratio = float(min_width2_ratio)
+-        self.max_jj_ratio = float(max_jj_ratio)
+-
+-    @staticmethod
+-    def _predicate_cols(qi: QueryInfo, tbl: str) -> Set[str]:
+-        roles = qi.roles.get(tbl)
+-        if roles is None:
+-            return set()
+-        out = set()
+-        out.update(roles.join_eq)
+-        out.update(roles.filter_eq)
+-        out.update(roles.filter_rng)
+-        return out
+-
+-    def _coverage_ratio(self, selected: Set[IndexKey], q_infos: Sequence[QueryInfo]) -> float:
+-        total = 0
+-        covered = 0
+-        for qi in q_infos:
+-            for tbl in qi.roles.keys():
+-                pred = self._predicate_cols(qi, tbl)
+-                if not pred:
+-                    continue
+-                total += 1
+-                ok = False
+-                for (t, cols) in selected:
+-                    if t != tbl:
+-                        continue
+-                    if any(c in pred for c in cols):
+-                        ok = True
+-                        break
+-                if ok:
+-                    covered += 1
+-        if total <= 0:
+-            return 1.0
+-        return float(covered) / float(total)
+-
+-    @staticmethod
+-    def _is_width2(idx: IndexKey) -> bool:
+-        return len(idx[1]) == 2
+-
+-    def _is_jj(self, meta: Optional[Dict[str, object]]) -> bool:
+-        if not meta:
+-            return False
+-        return str(meta.get("family", "")).upper() == "JJ"
+-
+-    def _has_filter(self, meta: Optional[Dict[str, object]]) -> bool:
+-        if not meta:
+-            return False
+-        return bool(meta.get("has_filter", False))
+-
+-    def _family_key(self, idx: IndexKey, meta: Optional[Dict[str, object]]) -> Tuple[str, str]:
+-        tbl, _ = idx
+-        fam = "other" if not meta else str(meta.get("family", "other"))
+-        return (str(tbl).lower(), fam)
+-
+-    def select(
+-        self,
+-        score_map: Dict[IndexKey, float],
+-        q_infos: Sequence[QueryInfo],
+-        per_query_candidates: Sequence[Set[IndexKey]],
+-        *,
+-        topk: int = 1000,
+-        coverage_target: float = 0.90,
+-        meta_map: Optional[Dict[IndexKey, Dict[str, object]]] = None,
+-        seed_set: Optional[Set[IndexKey]] = None,
+-    ) -> Tuple[Set[IndexKey], Dict[str, Any]]:
+-        K = int(topk)
+-        meta_map = meta_map or {}
+-        seed_set = seed_set or set()
+-
+-        # deterministic global ordering
+-        items = [(idx, float(score)) for idx, score in score_map.items()]
+-        items.sort(key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+-
+-        # split for width quota
+-        items_w2 = [(idx, s) for idx, s in items if self._is_width2(idx)]
+-        items_w1 = [(idx, s) for idx, s in items if len(idx[1]) == 1]
+-        items_other = [(idx, s) for idx, s in items if len(idx[1]) not in (1, 2)]
+-
+-        K2_min = max(0, int(round(self.min_width2_ratio * K)))
+-
+-        selected: Set[IndexKey] = set()
+-        fam_cnt = defaultdict(int)  # (tbl,fam)->count
+-        w2_cnt = 0
+-        jj_cnt = 0
+-
+-        def can_add(idx: IndexKey) -> bool:
+-            nonlocal w2_cnt, jj_cnt
+-            meta = meta_map.get(idx)
+-            famk = self._family_key(idx, meta)
+-            if fam_cnt[famk] >= self.cap_table_family and idx not in seed_set:
+-                return False
+-            if self._is_width2(idx):
+-                # JJ cap among width2
+-                if self._is_jj(meta):
+-                    # cap on ratio jj / width2
+-                    if w2_cnt > 0 and (jj_cnt + 1) / float(w2_cnt + 1) > self.max_jj_ratio and idx not in seed_set:
+-                        return False
+-            return True
+-
+-        def do_add(idx: IndexKey) -> None:
+-            nonlocal w2_cnt, jj_cnt
+-            meta = meta_map.get(idx)
+-            famk = self._family_key(idx, meta)
+-            selected.add(idx)
+-            fam_cnt[famk] += 1
+-            if self._is_width2(idx):
+-                w2_cnt += 1
+-                if self._is_jj(meta):
+-                    jj_cnt += 1
+-
+-        # 0) seeds first (high priority) in score order
+-        seeds_sorted = [(idx, score_map.get(idx, 0.0)) for idx in seed_set if idx in score_map]
+-        seeds_sorted.sort(key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+-        for idx, _s in seeds_sorted:
+-            if len(selected) >= K:
+-                break
+-            if idx in selected:
+-                continue
+-            if not can_add(idx):
+-                # seeds can override table-family cap
+-                do_add(idx)
+-            else:
+-                do_add(idx)
+-
+-        # 1) fill width2 quota
+-        for idx, _s in items_w2:
+-            if len(selected) >= K or w2_cnt >= K2_min:
+-                break
+-            if idx in selected:
+-                continue
+-            if not can_add(idx):
+-                continue
+-            do_add(idx)
+-
+-        # 2) fill remaining with global best (w2 then w1 then others)
+-        for pool in (items_w2, items_w1, items_other):
+-            for idx, _s in pool:
+-                if len(selected) >= K:
+-                    break
+-                if idx in selected:
+-                    continue
+-                if not can_add(idx):
+-                    continue
+-                do_add(idx)
+-
+-        # ----------------- Emergency rescue -----------------
+-        def evict_one(prefer_width1: bool = True) -> Optional[IndexKey]:
+-            """Evict lowest-score item that is non-seed and preferably non-filter.
+-
+-            Also updates counters (family / width2 / JJ).
+-            """
+-            nonlocal w2_cnt, jj_cnt
+-            if not selected:
+-                return None
+-            cand = []
+-            for x in selected:
+-                if x in seed_set:
+-                    continue
+-                meta = meta_map.get(x)
+-                # prefer evicting those without filter
+-                prio = 0
+-                if self._has_filter(meta):
+-                    prio += 10
+-                # if we need more width2, prefer evicting width1; if prefer_width1=True, penalize evicting width2
+-                if prefer_width1 and len(x[1]) == 2:
+-                    prio += 5
+-                cand.append((prio, float(score_map.get(x, 0.0)), x))
+-            if not cand:
+-                return None
+-            cand.sort(key=lambda t: (t[0], t[1]))
+-            _, _, x = cand[0]
+-
+-            meta = meta_map.get(x)
+-            famk = self._family_key(x, meta)
+-            selected.remove(x)
+-            fam_cnt[famk] -= 1
+-
+-            if self._is_width2(x):
+-                w2_cnt = max(0, w2_cnt - 1)
+-                if self._is_jj(meta):
+-                    jj_cnt = max(0, jj_cnt - 1)
+-
+-            return x
+-
+-        # Rescue missing seeds if any (seed recall)
+-        missing_seeds = [idx for idx in seed_set if idx not in selected and idx in score_map]
+-        if missing_seeds:
+-            missing_seeds.sort(key=lambda i: (-float(score_map.get(i, 0.0)), i[0], i[1]))
+-            for idx in missing_seeds:
+-                if idx in selected:
+-                    continue
+-                if len(selected) < K:
+-                    do_add(idx)
+-                    continue
+-                ev = evict_one(prefer_width1=True)
+-                if ev is not None:
+-                    do_add(idx)
+-
+-        # Rescue width2 ratio if still low
+-        need_w2 = max(0, K2_min - w2_cnt)
+-        if need_w2 > 0:
+-            for idx, _s in items_w2:
+-                if need_w2 <= 0:
+-                    break
+-                if idx in selected:
+-                    continue
+-                if not can_add(idx):
+-                    continue
+-                if len(selected) < K:
+-                    do_add(idx)
+-                    need_w2 -= 1
+-                else:
+-                    ev = evict_one(prefer_width1=True)
+-                    if ev is not None:
+-                        do_add(idx)
+-                        need_w2 -= 1
+-
+-        # Coverage rescue
+-        cov_ratio = self._coverage_ratio(selected, q_infos)
+-        boosted = 0
+-        if cov_ratio < float(coverage_target):
+-            # Prefer adding high-score candidates that help predicate coverage
+-            # and evicting low-score non-seed non-filter items.
+-            # Compute uncovered (qid,tbl) pairs
+-            uncovered: Set[Tuple[int, str]] = set()
+-            for qid, qi in enumerate(q_infos):
+-                for tbl in qi.roles.keys():
+-                    pred = self._predicate_cols(qi, tbl)
+-                    if not pred:
+-                        continue
+-                    ok = False
+-                    for (t, cols) in selected:
+-                        if t != tbl:
+-                            continue
+-                        if any(c in pred for c in cols):
+-                            ok = True
+-                            break
+-                    if not ok:
+-                        uncovered.add((qid, str(tbl).lower()))
+-
+-            def helps_coverage(idx: IndexKey) -> bool:
+-                tbl, cols = idx
+-                tbl = str(tbl).lower()
+-                if not cols:
+-                    return False
+-                for qid, t in uncovered:
+-                    if t != tbl:
+-                        continue
+-                    pred = self._predicate_cols(q_infos[qid], t)
+-                    if any(c in pred for c in cols):
+-                        return True
+-                return False
+-
+-            for idx, _s in items:
+-                if cov_ratio >= float(coverage_target):
+-                    break
+-                if idx in selected:
+-                    continue
+-                if not helps_coverage(idx):
+-                    continue
+-                if not can_add(idx):
+-                    continue
+-                if len(selected) < K:
+-                    do_add(idx)
+-                    boosted += 1
+-                else:
+-                    ev = evict_one(prefer_width1=True)
+-                    if ev is None:
+-                        break
+-                    do_add(idx)
+-                    boosted += 1
+-
+-                cov_ratio = self._coverage_ratio(selected, q_infos)
+-
+-        # stats
+-        cov_ratio = self._coverage_ratio(selected, q_infos)
+-        seed_recall = 1.0
+-        if seed_set:
+-            seed_recall = float(len([s for s in seed_set if s in selected])) / float(len(seed_set))
+-
+-        stats = {
+-            "wdcg_pruned_count": len(selected),
+-            "coverage_ratio": float(cov_ratio),
+-            "seed_recall": float(seed_recall),
+-            "width2_ratio": float(w2_cnt) / float(max(1, len(selected))),
+-            "jj_width2_ratio": float(jj_cnt) / float(max(1, w2_cnt)),
+-            "coverage_rescue_added": int(boosted),
+-        }
+-        return selected, stats
+-
+-
+-class CandidateGenerator:
+-    """Phase 0.5 candidate generation funnel (WDCG 2.0)."""
+-
+-    def __init__(self, db_con: Optional[Any] = None, use_plan: bool = True) -> None:
+-        self.db_con = db_con
+-        self.use_plan = bool(use_plan)
+-        # Plan-first (golden path): enable plan-based extraction when use_plan is True;
+-        # otherwise force SQL-mode.
+-        self.extractor = TemplateExtractor(
+-            db_con=db_con,
+-            use_plan=bool(self.use_plan),
+-            force_sql_mode=(not self.use_plan),
+-        )
+-        self.enum = CooccurrenceEnumerator()
+-        self.ranker = WDCGRanker()
+-        self.selector = TopKSelector()
+-        self._round = 0
+-
+-        # ---- lightweight table stats cache (rows + DML churn) ----
+-        # Keys are normalized to lower-case table names.
+-        self._tbl_rows: Dict[str, float] = {}
+-        self._tbl_dml_ratio: Dict[str, float] = {}
+-        self._tbl_dml_ema: Dict[str, float] = {}
+-        self._tbl_last_ts: Dict[str, float] = {}
+-
+-    # ------------------------------
+-    # Table stats helpers
+-    # ------------------------------
+-
+-    @staticmethod
+-    def _norm_tbl_name(t: str) -> str:
+-        t = (t or "").strip()
+-        # strip schema prefix if present
+-        if "." in t:
+-            t = t.split(".")[-1]
+-        return t.lower()
+-
+-    def _fetch_table_stats(
+-        self,
+-        tables: Sequence[str],
+-        *,
+-        batch_size: int = 200,
+-    ) -> Dict[str, Dict[str, float]]:
+-        """Fetch per-table stats from PostgreSQL.
+-
+-        Returns mapping tbl -> {rows, dml_ratio_raw, ins, upd, del, reads}.
+-        - rows: from pg_stat_user_tables.n_live_tup when available, else pg_class.reltuples
+-        - dml_ratio_raw: writes / (writes + reads) using pg_stat counters
+-        """
+-        out: Dict[str, Dict[str, float]] = {}
+-        if self.db_con is None:
+-            return out
+-
+-        # normalize and unique
+-        uniq: List[str] = []
+-        seen = set()
+-        for t in tables:
+-            tn = self._norm_tbl_name(t)
+-            if not tn or tn in seen:
+-                continue
+-            seen.add(tn)
+-            uniq.append(tn)
+-
+-        if not uniq:
+-            return out
+-
+-        # chunked queries (ANY(array))
+-        bs = max(1, int(batch_size))
+-        for i in range(0, len(uniq), bs):
+-            chunk = uniq[i : i + bs]
+-
+-            # 1) pg_stat_user_tables (preferred: has n_live_tup + DML counters)
+-            try:
+-                q1 = (
+-                    "SELECT lower(relname) AS relname, "
+-                    "       COALESCE(n_live_tup, 0)::float8 AS n_live_tup, "
+-                    "       COALESCE(n_tup_ins, 0)::float8 AS ins, "
+-                    "       COALESCE(n_tup_upd, 0)::float8 AS upd, "
+-                    "       COALESCE(n_tup_del, 0)::float8 AS del, "
+-                    "       COALESCE(seq_tup_read, 0)::float8 AS seq_read, "
+-                    "       COALESCE(idx_tup_fetch, 0)::float8 AS idx_fetch "
+-                    "  FROM pg_stat_user_tables "
+-                    " WHERE lower(relname) = ANY(%s)"
+-                )
+-                rows = self.db_con.exec_fetchall_params(q1, (chunk,))
+-                for relname, n_live_tup, ins, upd, dele, seq_read, idx_fetch in rows or []:
+-                    relname = str(relname).lower()
+-                    writes = float(ins) + float(upd) + float(dele)
+-                    reads = float(seq_read) + float(idx_fetch)
+-                    denom = max(1.0, writes + reads)
+-                    dml_ratio = writes / denom
+-                    out[relname] = {
+-                        "rows": float(n_live_tup),
+-                        "dml_ratio_raw": float(dml_ratio),
+-                        "ins": float(ins),
+-                        "upd": float(upd),
+-                        "del": float(dele),
+-                        "reads": float(reads),
+-                    }
+-            except Exception as e:
+-                logger.debug("TableStats: pg_stat_user_tables fetch failed: %s", e)
+-
+-            # 2) pg_class.reltuples fallback for missing tables or 0 rows
+-            missing = [t for t in chunk if t not in out or float(out[t].get("rows", 0.0)) <= 0.0]
+-            if missing:
+-                try:
+-                    q2 = (
+-                        "SELECT lower(c.relname) AS relname, COALESCE(c.reltuples, 0)::float8 AS reltuples "
+-                        "  FROM pg_class c "
+-                        "  JOIN pg_namespace n ON n.oid = c.relnamespace "
+-                        " WHERE c.relkind = 'r' "
+-                        "   AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+-                        "   AND lower(c.relname) = ANY(%s)"
+-                    )
+-                    rows2 = self.db_con.exec_fetchall_params(q2, (missing,))
+-                    for relname, reltuples in rows2 or []:
+-                        relname = str(relname).lower()
+-                        if relname not in out:
+-                            out[relname] = {"rows": float(reltuples), "dml_ratio_raw": 0.0}
+-                        else:
+-                            out[relname]["rows"] = max(float(out[relname].get("rows", 0.0)), float(reltuples))
+-                except Exception as e:
+-                    logger.debug("TableStats: pg_class.reltuples fetch failed: %s", e)
+-
+-        return out
+-
+-    @staticmethod
+-    def _prune_qi_tables(qi: QueryInfo, drop_tbls: Set[str]) -> None:
+-        if not drop_tbls:
+-            return
+-        # Normalize drop set once
+-        drop_tbls = {str(t).lower() for t in drop_tbls}
+-
+-        def _drop_from_dict(d: Dict[str, Any]) -> None:
+-            for t in list(d.keys()):
+-                if str(t).lower() in drop_tbls:
+-                    d.pop(t, None)
+-
+-        # roles + tables
+-        for t in list(getattr(qi, "roles", {}).keys()):
+-            if str(t).lower() in drop_tbls:
+-                qi.roles.pop(t, None)
+-        try:
+-            qi.tables = {t for t in qi.tables if str(t).lower() not in drop_tbls}
+-        except Exception:
+-            pass
+-
+-        # physical signals
+-        _drop_from_dict(qi.scan_cost)
+-        _drop_from_dict(qi.plan_rows)
+-        _drop_from_dict(qi.base_rows)
+-        _drop_from_dict(qi.scan_type)
+-        _drop_from_dict(qi.quality_flags)
+-        _drop_from_dict(qi.table_risk)
+-
+-    def generate(
+-        self,
+-        workload_lines: Sequence[str],
+-        old_conf: Set[IndexKey],
+-        mu_table: Dict[IndexKey, float],
+-        *,
+-        topk: int = 1000,
+-        tau: float = 0.05,
+-        rho: float = 0.7,  # kept for API compatibility (unused in 2.0 ranker)
+-        cap_family: int = 2,  # kept for API compatibility
+-        cols_per_table: int = 12,
+-        m_single: int = 8,
+-        warmup_rounds: int = 0,
+-        coverage_target: float = 0.90,
+-        coverage_boost: bool = True,  # kept for API compatibility
+-        # seed / role knobs
+-        top_E: int = 5,
+-        top_R: int = 3,
+-        top_J: int = 5,
+-        seed_limit_per_table: int = 50,
+-        # compatibility knobs (kept for AdaSelect++ v6.3.1 wiring)
+-        min_table_rows: int = 0,
+-        max_dml_ratio: float = 1.0,
+-        enable_table_filter: bool = False,
+-        table_stats_batch_size: int = 200,
+-        dml_ema_alpha: float = 0.30,
+-        dml_ema_tau_sec: float = 0.0,
+-        # DML-aware *soft* downweight (never hard ban here)
+-        dml_soft_enable: bool = True,
+-        dml_soft_k: float = 2.0,
+-        dml_soft_min: float = 0.20,
+-
+-    ) -> GenerationResult:
+-        t0 = time.time()
+-
+-        # configure enumerator
+-        self.enum.tau_cooc = float(tau)
+-        self.enum.cols_per_table = int(cols_per_table)
+-        self.enum.m_single = int(m_single)
+-        self.enum.top_E = int(top_E)
+-        self.enum.top_R = int(top_R)
+-        self.enum.top_J = int(top_J)
+-        self.enum.seed_limit_per_table = int(seed_limit_per_table)
+-
+-        # 1) extract
+-        q_infos: List[QueryInfo] = self.extractor.extract(workload_lines)
+-        # Debug: basic extractor signal (helps catch empty-role bugs quickly)
+-        try:
+-            _tset = set()
+-            for _qi in q_infos:
+-                _tset |= set(getattr(_qi, "tables", []) or [])
+-            logger.info("WDCG.gen: extracted q=%d tables=%d plan=%s", len(q_infos), len(_tset), str(getattr(self.extractor, "use_plan", False)))
+-        except Exception:
+-            pass
+-
+-        # 1.5) Table-level pruning & stats wiring (rows + DML churn)
+-        # - hard filter: rows < min_table_rows -> drop table roles before rank/select
+-        # - soft downweight: high DML churn -> later multiply WDCG scores
+-        pruned_tables: Set[str] = set()
+-        dml_snapshot: Dict[str, float] = {}
+-        dml_ema_snapshot: Dict[str, float] = {}
+-        rows_snapshot: Dict[str, float] = {}
+-
+-        if bool(enable_table_filter) and self.db_con is not None:
+-            try:
+-                all_tbls: List[str] = []
+-                for qi in q_infos:
+-                    for t in (qi.tables or set()):
+-                        all_tbls.append(str(t))
+-
+-                stats_map = self._fetch_table_stats(all_tbls, batch_size=int(table_stats_batch_size))
+-                now_ts = time.time()
+-
+-                # update caches
+-                for t_raw, st in (stats_map or {}).items():
+-                    t = self._norm_tbl_name(t_raw)
+-                    rows = float(st.get("rows", 0.0) or 0.0)
+-                    if rows > 0.0:
+-                        self._tbl_rows[t] = rows
+-                    rows_snapshot[t] = float(self._tbl_rows.get(t, rows) or rows)
+-
+-                    dml_r = float(st.get("dml_ratio_raw", 0.0) or 0.0)
+-                    dml_snapshot[t] = dml_r
+-                    self._tbl_dml_ratio[t] = dml_r
+-
+-                    # EMA update (either fixed alpha or time-constant based)
+-                    old = float(self._tbl_dml_ema.get(t, dml_r) or dml_r)
+-                    a = float(dml_ema_alpha)
+-                    if float(dml_ema_tau_sec) > 0.0:
+-                        last_ts = float(self._tbl_last_ts.get(t, now_ts) or now_ts)
+-                        dt = max(0.0, now_ts - last_ts)
+-                        tau = max(1e-9, float(dml_ema_tau_sec))
+-                        a = math.exp(-dt / tau)
+-                    a = max(0.0, min(1.0, a))
+-                    ema = a * old + (1.0 - a) * dml_r
+-                    self._tbl_dml_ema[t] = float(ema)
+-                    self._tbl_last_ts[t] = float(now_ts)
+-                    dml_ema_snapshot[t] = float(ema)
+-
+-                    # hard filter by rows (unknown rows -> never hard kill)
+-                    if int(min_table_rows) > 0 and rows > 0.0 and rows < float(min_table_rows):
+-                        pruned_tables.add(t)
+-
+-                # wire base_rows into each QueryInfo (helps selectivity scoring)
+-                for qi in q_infos:
+-                    for t in list(qi.tables or set()):
+-                        tn = self._norm_tbl_name(str(t))
+-                        rows = float(self._tbl_rows.get(tn, 0.0) or 0.0)
+-                        if rows > 0.0:
+-                            qi.base_rows[str(t).lower()] = rows
+-
+-                # prune small tables BEFORE enumerator/ranker
+-                if pruned_tables:
+-                    for qi in q_infos:
+-                        self._prune_qi_tables(qi, pruned_tables)
+-            except Exception as e:
+-                logger.debug("TableFilter: wiring/prune failed: %s", e)
+-
+-        # 2) update stats
+-        self.enum.update_stats(q_infos)
+-
+-        # 3) enumerate candidates from the current micro-batch only.
+-        # IMPORTANT: do NOT inject the existing configuration into every query's candidate set;
+-        # query_indexes[i] must only contain indexes that are relevant to query i.
+-        per_query_raw = self.enum.enumerate_candidates(q_infos)
+-
+-        raw_union: Set[IndexKey] = set()
+-        for s in per_query_raw:
+-            raw_union.update(s)
+-
+-        # 4) rank (mu used as a weak exploration prior)
+-        use_mu = not (int(warmup_rounds) > 0 and self._round < int(warmup_rounds))
+-        mu_init = 0.25
+-        mu_decay = 0.90
+-        per_query_ranked, score_map = self.ranker.rank(
+-            q_infos,
+-            per_query_raw,
+-            freq_map=self.enum.freq_map,
+-            mu_prior=(mu_table if use_mu else None),
+-            mu_init=mu_init if use_mu else 0.0,
+-            mu_decay=mu_decay,
+-        )
+-
+-        # 4.5) DML-aware *soft* downweight (score *= decay(table))
+-        dml_weight_min = 1.0
+-        dml_weight_max = 1.0
+-        dml_tables_downweighted: Set[str] = set()
+-        if bool(enable_table_filter) and bool(dml_soft_enable) and float(max_dml_ratio) < 1.0:
+-            th = max(0.0, min(1.0, float(max_dml_ratio)))
+-            k = max(0.0, float(dml_soft_k))
+-            wmin = max(0.0, min(1.0, float(dml_soft_min)))
+-            for idx in list(score_map.keys()):
+-                tbl, _cols = idx
+-                t = self._norm_tbl_name(str(tbl))
+-                ema = float(self._tbl_dml_ema.get(t, self._tbl_dml_ratio.get(t, 0.0)) or 0.0)
+-                w = 1.0
+-                if ema > th and th < 1.0:
+-                    x = (ema - th) / max(1e-6, (1.0 - th))
+-                    w = max(wmin, math.exp(-k * x))
+-                    dml_tables_downweighted.add(t)
+-                score_map[idx] = float(score_map.get(idx, 0.0)) * float(w)
+-                dml_weight_min = min(dml_weight_min, float(w))
+-                dml_weight_max = max(dml_weight_max, float(w))
+-
+-        # 5) guarded Top-K selection
+-        selected, sel_stats = self.selector.select(
+-            score_map,
+-            q_infos,
+-            per_query_candidates=[set(s) for s in per_query_raw],
+-            topk=topk,
+-            coverage_target=coverage_target,
+-            meta_map=self.enum.last_meta,
+-            seed_set=self.enum.last_seed_set,
+-        )
+-
+-        # 6) per-query candidate sets for later phases
+-        query_indexes: List[Set[IndexKey]] = []
+-        for s in per_query_raw:
+-            query_indexes.append(set(x for x in s if x in selected))
+-
+-        elapsed_ms = (time.time() - t0) * 1000.0
+-
+-        stats: Dict[str, Any] = {
+-            "candidate_count_raw": int(len(raw_union)),
+-            "wdcg_pruned_count": int(sel_stats.get("wdcg_pruned_count", len(selected))),
+-            "coverage_ratio": float(sel_stats.get("coverage_ratio", 0.0)),
+-            "seed_recall": float(sel_stats.get("seed_recall", 0.0)),
+-            "width2_ratio": float(sel_stats.get("width2_ratio", 0.0)),
+-            "jj_width2_ratio": float(sel_stats.get("jj_width2_ratio", 0.0)),
+-            "wdcg_elapsed_ms": float(elapsed_ms),
+-            "wdcg_warmup_active": (not use_mu),
+-            "table_filter_enabled": bool(enable_table_filter),
+-            "min_table_rows": int(min_table_rows),
+-            "pruned_small_tables": int(len(pruned_tables)),
+-            "pruned_small_tables_list": ",".join(sorted(list(pruned_tables))[:50]) if pruned_tables else "",
+-            "dml_threshold": float(max_dml_ratio),
+-            "dml_soft_enable": bool(dml_soft_enable),
+-            "dml_soft_k": float(dml_soft_k),
+-            "dml_soft_min": float(dml_soft_min),
+-            "dml_tables_downweighted": int(len(dml_tables_downweighted)),
+-            "dml_weight_min": float(dml_weight_min),
+-            "dml_weight_max": float(dml_weight_max),
+-        }
+-        stats.update(sel_stats)
+-
+-        # ----------------- Falsifiable diagnostics (3-step) -----------------
+-        # Step A: for each selected index x, count how many queries it affects:
+-        #   aff(x) = |{i | x in query_indexes[i]}|
+-        # Step B: predicted what-if calls under "only-run-relevant-queries" equals sum_x aff(x).
+-        # Step C: semantic contract: query_indexes[i] must only include indexes relevant to query i.
+-        try:
+-            aff: Dict[IndexKey, int] = {idx: 0 for idx in selected}
+-            for qset in query_indexes:
+-                for idx in qset:
+-                    if idx in aff:
+-                        aff[idx] += 1
+-            if aff:
+-                aff_vals = list(aff.values())
+-                aff_vals.sort()
+-                n = len(aff_vals)
+-                p90 = aff_vals[int(0.9 * (n - 1))] if n > 1 else aff_vals[0]
+-                aff_max = aff_vals[-1]
+-                aff_avg = float(sum(aff_vals)) / float(max(1, n))
+-                predicted_calls = int(sum(aff_vals))
+-                # flag suspicious "global" candidates
+-                suspicious_th = max(4, int(round(0.8 * len(query_indexes))))
+-                suspicious = [(a, idx) for idx, a in aff.items() if a >= suspicious_th]
+-                suspicious.sort(key=lambda t: (-t[0], t[1][0], t[1][1]))
+-                top_susp = suspicious[:20]
+-
+-                stats.update(
+-                    {
+-                        "aff_avg": float(aff_avg),
+-                        "aff_p90": int(p90),
+-                        "aff_max": int(aff_max),
+-                        "predicted_what_if_calls": int(predicted_calls),
+-                        "suspicious_aff_count": int(len(suspicious)),
+-                    }
+-                )
+-
+-                if top_susp:
+-                    # concise printable offenders for quick falsification
+-                    stats["suspicious_aff_top"] = ";".join(
+-                        [f"{a}:{t}:{','.join(cols)}" for a, (t, cols) in top_susp]
+-                    )
+-                    logger.warning(
+-                        "WDCG.diag: suspicious aff>=%.2f|w| detected (top=%s)",
+-                        0.8,
+-                        str(stats["suspicious_aff_top"]),
+-                    )
+-        except Exception as _e:
+-            logger.debug("WDCG.diag: aff computation failed: %s", _e)
+-
+-        self._round += 1
+-
+-        try:
+-            logger.info("WDCG.gen: raw=%d scored=%d selected=%d", len(raw_union), len(score_map), len(selected))
+-            if len(raw_union) == 0:
+-                logger.warning("WDCG.gen: empty candidate union; extractor_stats=%s", self.extractor.get_stats())
+-        except Exception:
+-            pass
+-        return GenerationResult(
+-            query_indexes=query_indexes,
+-            topk_set=set(selected),
+-            wdcg_score_map=dict(score_map),
+-            stats=stats,
+-        )
++from __future__ import annotations
++
++import time
++import math
++from collections import defaultdict
++from dataclasses import dataclass
++from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
++
++from .enumerator import CooccurrenceEnumerator, IndexKey
++from .ranker import WDCGRanker
++from .template_extractor import QueryInfo, TemplateExtractor
++
++import logging
++logger = logging.getLogger(__name__)
++@dataclass
++class GenerationResult:
++    query_indexes: List[Set[IndexKey]]
++    topk_set: Set[IndexKey]
++    wdcg_score_map: Dict[IndexKey, float]
++    stats: Dict[str, Any]
++
++
++class TopKSelector:
++    """Guarded Top-K selector for Phase 0.5 WDCG 2.0.
++
++    Key guardrails ("No Irreversible Kill"):
++      - No prefix-dominance pruning (prevents width-1 killing width-2).
++      - Seeds are preserved (as long as TopK is not exceeded).
++      - Width quotas to avoid single-column collapse.
++      - (J,J) ratio cap to prevent JOB-type mismatch.
++      - Emergency rescue to satisfy coverage and seed recall.
++
++    The selector uses *soft constraints*; when rescue is needed it evicts
++    low-score items that are non-seed and non-filter first.
++    """
++
++    def __init__(
++        self,
++        *,
++        cap_table_family: int = 5,
++        min_width2_ratio: float = 0.40,
++        max_jj_ratio: float = 0.30,
++    ) -> None:
++        self.cap_table_family = int(cap_table_family)
++        self.min_width2_ratio = float(min_width2_ratio)
++        self.max_jj_ratio = float(max_jj_ratio)
++
++    @staticmethod
++    def _predicate_cols(qi: QueryInfo, tbl: str) -> Set[str]:
++        roles = qi.roles.get(tbl)
++        if roles is None:
++            return set()
++        out = set()
++        out.update(roles.join_eq)
++        out.update(roles.filter_eq)
++        out.update(roles.filter_rng)
++        return out
++
++    def _coverage_ratio(self, selected: Set[IndexKey], q_infos: Sequence[QueryInfo]) -> float:
++        total = 0
++        covered = 0
++        for qi in q_infos:
++            for tbl in qi.roles.keys():
++                pred = self._predicate_cols(qi, tbl)
++                if not pred:
++                    continue
++                total += 1
++                ok = False
++                for (t, cols) in selected:
++                    if t != tbl:
++                        continue
++                    if any(c in pred for c in cols):
++                        ok = True
++                        break
++                if ok:
++                    covered += 1
++        if total <= 0:
++            return 1.0
++        return float(covered) / float(total)
++
++    @staticmethod
++    def _is_width2(idx: IndexKey) -> bool:
++        return len(idx[1]) == 2
++
++    def _is_jj(self, meta: Optional[Dict[str, object]]) -> bool:
++        if not meta:
++            return False
++        return str(meta.get("family", "")).upper() == "JJ"
++
++    def _has_filter(self, meta: Optional[Dict[str, object]]) -> bool:
++        if not meta:
++            return False
++        return bool(meta.get("has_filter", False))
++
++    def _family_key(self, idx: IndexKey, meta: Optional[Dict[str, object]]) -> Tuple[str, str]:
++        tbl, _ = idx
++        fam = "other" if not meta else str(meta.get("family", "other"))
++        return (str(tbl).lower(), fam)
++
++    def select(
++        self,
++        score_map: Dict[IndexKey, float],
++        q_infos: Sequence[QueryInfo],
++        per_query_candidates: Sequence[Set[IndexKey]],
++        *,
++        topk: int = 1000,
++        coverage_target: float = 0.90,
++        meta_map: Optional[Dict[IndexKey, Dict[str, object]]] = None,
++        seed_set: Optional[Set[IndexKey]] = None,
++    ) -> Tuple[Set[IndexKey], Dict[str, Any]]:
++        K = int(topk)
++        meta_map = meta_map or {}
++        seed_set = seed_set or set()
++
++        # deterministic global ordering
++        items = [(idx, float(score)) for idx, score in score_map.items()]
++        items.sort(key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
++
++        # split for width quota
++        items_w2 = [(idx, s) for idx, s in items if self._is_width2(idx)]
++        items_w1 = [(idx, s) for idx, s in items if len(idx[1]) == 1]
++        items_other = [(idx, s) for idx, s in items if len(idx[1]) not in (1, 2)]
++
++        K2_min = max(0, int(round(self.min_width2_ratio * K)))
++
++        selected: Set[IndexKey] = set()
++        fam_cnt = defaultdict(int)  # (tbl,fam)->count
++        w2_cnt = 0
++        jj_cnt = 0
++
++        def can_add(idx: IndexKey) -> bool:
++            nonlocal w2_cnt, jj_cnt
++            meta = meta_map.get(idx)
++            famk = self._family_key(idx, meta)
++            if fam_cnt[famk] >= self.cap_table_family and idx not in seed_set:
++                return False
++            if self._is_width2(idx):
++                # JJ cap among width2
++                if self._is_jj(meta):
++                    # cap on ratio jj / width2
++                    if w2_cnt > 0 and (jj_cnt + 1) / float(w2_cnt + 1) > self.max_jj_ratio and idx not in seed_set:
++                        return False
++            return True
++
++        def do_add(idx: IndexKey) -> None:
++            nonlocal w2_cnt, jj_cnt
++            meta = meta_map.get(idx)
++            famk = self._family_key(idx, meta)
++            selected.add(idx)
++            fam_cnt[famk] += 1
++            if self._is_width2(idx):
++                w2_cnt += 1
++                if self._is_jj(meta):
++                    jj_cnt += 1
++
++        # 0) seeds first (high priority) in score order
++        seeds_sorted = [(idx, score_map.get(idx, 0.0)) for idx in seed_set if idx in score_map]
++        seeds_sorted.sort(key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
++        for idx, _s in seeds_sorted:
++            if len(selected) >= K:
++                break
++            if idx in selected:
++                continue
++            if not can_add(idx):
++                # seeds can override table-family cap
++                do_add(idx)
++            else:
++                do_add(idx)
++
++        # 1) fill width2 quota
++        for idx, _s in items_w2:
++            if len(selected) >= K or w2_cnt >= K2_min:
++                break
++            if idx in selected:
++                continue
++            if not can_add(idx):
++                continue
++            do_add(idx)
++
++        # 2) fill remaining with global best (w2 then w1 then others)
++        for pool in (items_w2, items_w1, items_other):
++            for idx, _s in pool:
++                if len(selected) >= K:
++                    break
++                if idx in selected:
++                    continue
++                if not can_add(idx):
++                    continue
++                do_add(idx)
++
++        # ----------------- Emergency rescue -----------------
++        def evict_one(prefer_width1: bool = True) -> Optional[IndexKey]:
++            """Evict lowest-score item that is non-seed and preferably non-filter.
++
++            Also updates counters (family / width2 / JJ).
++            """
++            nonlocal w2_cnt, jj_cnt
++            if not selected:
++                return None
++            cand = []
++            for x in selected:
++                if x in seed_set:
++                    continue
++                meta = meta_map.get(x)
++                # prefer evicting those without filter
++                prio = 0
++                if self._has_filter(meta):
++                    prio += 10
++                # if we need more width2, prefer evicting width1; if prefer_width1=True, penalize evicting width2
++                if prefer_width1 and len(x[1]) == 2:
++                    prio += 5
++                cand.append((prio, float(score_map.get(x, 0.0)), x))
++            if not cand:
++                return None
++            cand.sort(key=lambda t: (t[0], t[1]))
++            _, _, x = cand[0]
++
++            meta = meta_map.get(x)
++            famk = self._family_key(x, meta)
++            selected.remove(x)
++            fam_cnt[famk] -= 1
++
++            if self._is_width2(x):
++                w2_cnt = max(0, w2_cnt - 1)
++                if self._is_jj(meta):
++                    jj_cnt = max(0, jj_cnt - 1)
++
++            return x
++
++        # Rescue missing seeds if any (seed recall)
++        missing_seeds = [idx for idx in seed_set if idx not in selected and idx in score_map]
++        if missing_seeds:
++            missing_seeds.sort(key=lambda i: (-float(score_map.get(i, 0.0)), i[0], i[1]))
++            for idx in missing_seeds:
++                if idx in selected:
++                    continue
++                if len(selected) < K:
++                    do_add(idx)
++                    continue
++                ev = evict_one(prefer_width1=True)
++                if ev is not None:
++                    do_add(idx)
++
++        # Rescue width2 ratio if still low
++        need_w2 = max(0, K2_min - w2_cnt)
++        if need_w2 > 0:
++            for idx, _s in items_w2:
++                if need_w2 <= 0:
++                    break
++                if idx in selected:
++                    continue
++                if not can_add(idx):
++                    continue
++                if len(selected) < K:
++                    do_add(idx)
++                    need_w2 -= 1
++                else:
++                    ev = evict_one(prefer_width1=True)
++                    if ev is not None:
++                        do_add(idx)
++                        need_w2 -= 1
++
++        # Coverage rescue
++        cov_ratio = self._coverage_ratio(selected, q_infos)
++        boosted = 0
++        if cov_ratio < float(coverage_target):
++            # Prefer adding high-score candidates that help predicate coverage
++            # and evicting low-score non-seed non-filter items.
++            # Compute uncovered (qid,tbl) pairs
++            uncovered: Set[Tuple[int, str]] = set()
++            for qid, qi in enumerate(q_infos):
++                for tbl in qi.roles.keys():
++                    pred = self._predicate_cols(qi, tbl)
++                    if not pred:
++                        continue
++                    ok = False
++                    for (t, cols) in selected:
++                        if t != tbl:
++                            continue
++                        if any(c in pred for c in cols):
++                            ok = True
++                            break
++                    if not ok:
++                        uncovered.add((qid, str(tbl).lower()))
++
++            def helps_coverage(idx: IndexKey) -> bool:
++                tbl, cols = idx
++                tbl = str(tbl).lower()
++                if not cols:
++                    return False
++                for qid, t in uncovered:
++                    if t != tbl:
++                        continue
++                    pred = self._predicate_cols(q_infos[qid], t)
++                    if any(c in pred for c in cols):
++                        return True
++                return False
++
++            for idx, _s in items:
++                if cov_ratio >= float(coverage_target):
++                    break
++                if idx in selected:
++                    continue
++                if not helps_coverage(idx):
++                    continue
++                if not can_add(idx):
++                    continue
++                if len(selected) < K:
++                    do_add(idx)
++                    boosted += 1
++                else:
++                    ev = evict_one(prefer_width1=True)
++                    if ev is None:
++                        break
++                    do_add(idx)
++                    boosted += 1
++
++                cov_ratio = self._coverage_ratio(selected, q_infos)
++
++        # stats
++        cov_ratio = self._coverage_ratio(selected, q_infos)
++        seed_recall = 1.0
++        if seed_set:
++            seed_recall = float(len([s for s in seed_set if s in selected])) / float(len(seed_set))
++
++        stats = {
++            "wdcg_pruned_count": len(selected),
++            "coverage_ratio": float(cov_ratio),
++            "seed_recall": float(seed_recall),
++            "width2_ratio": float(w2_cnt) / float(max(1, len(selected))),
++            "jj_width2_ratio": float(jj_cnt) / float(max(1, w2_cnt)),
++            "coverage_rescue_added": int(boosted),
++        }
++        return selected, stats
++
++
++class CandidateGenerator:
++    """Phase 0.5 candidate generation funnel (WDCG 2.0)."""
++
++    def __init__(self, db_con: Optional[Any] = None, use_plan: bool = True) -> None:
++        self.db_con = db_con
++        self.use_plan = bool(use_plan)
++        # Plan-first (golden path): enable plan-based extraction when use_plan is True;
++        # otherwise force SQL-mode.
++        self.extractor = TemplateExtractor(
++            db_con=db_con,
++            use_plan=bool(self.use_plan),
++            force_sql_mode=(not self.use_plan),
++        )
++        self.enum = CooccurrenceEnumerator()
++        self.ranker = WDCGRanker()
++        self.selector = TopKSelector()
++        self._round = 0
++
++        # ---- lightweight table stats cache (rows + DML churn) ----
++        # Keys are normalized to lower-case table names.
++        self._tbl_rows: Dict[str, float] = {}
++        self._tbl_dml_ratio: Dict[str, float] = {}
++        self._tbl_dml_ema: Dict[str, float] = {}
++        self._tbl_last_ts: Dict[str, float] = {}
++
++    # ------------------------------
++    # Table stats helpers
++    # ------------------------------
++
++    @staticmethod
++    def _norm_tbl_name(t: str) -> str:
++        t = (t or "").strip()
++        # strip schema prefix if present
++        if "." in t:
++            t = t.split(".")[-1]
++        return t.lower()
++
++    def _fetch_table_stats(
++        self,
++        tables: Sequence[str],
++        *,
++        batch_size: int = 200,
++    ) -> Dict[str, Dict[str, float]]:
++        """Fetch per-table stats from PostgreSQL.
++
++        Returns mapping tbl -> {rows, dml_ratio_raw, ins, upd, del, reads}.
++        - rows: from pg_stat_user_tables.n_live_tup when available, else pg_class.reltuples
++        - dml_ratio_raw: writes / (writes + reads) using pg_stat counters
++        """
++        out: Dict[str, Dict[str, float]] = {}
++        if self.db_con is None:
++            return out
++
++        # normalize and unique
++        uniq: List[str] = []
++        seen = set()
++        for t in tables:
++            tn = self._norm_tbl_name(t)
++            if not tn or tn in seen:
++                continue
++            seen.add(tn)
++            uniq.append(tn)
++
++        if not uniq:
++            return out
++
++        # chunked queries (ANY(array))
++        bs = max(1, int(batch_size))
++        for i in range(0, len(uniq), bs):
++            chunk = uniq[i : i + bs]
++
++            # 1) pg_stat_user_tables (preferred: has n_live_tup + DML counters)
++            try:
++                q1 = (
++                    "SELECT lower(relname) AS relname, "
++                    "       COALESCE(n_live_tup, 0)::float8 AS n_live_tup, "
++                    "       COALESCE(n_tup_ins, 0)::float8 AS ins, "
++                    "       COALESCE(n_tup_upd, 0)::float8 AS upd, "
++                    "       COALESCE(n_tup_del, 0)::float8 AS del, "
++                    "       COALESCE(seq_tup_read, 0)::float8 AS seq_read, "
++                    "       COALESCE(idx_tup_fetch, 0)::float8 AS idx_fetch "
++                    "  FROM pg_stat_user_tables "
++                    " WHERE lower(relname) = ANY(%s)"
++                )
++                rows = self.db_con.exec_fetchall_params(q1, (chunk,))
++                for relname, n_live_tup, ins, upd, dele, seq_read, idx_fetch in rows or []:
++                    relname = str(relname).lower()
++                    writes = float(ins) + float(upd) + float(dele)
++                    reads = float(seq_read) + float(idx_fetch)
++                    denom = max(1.0, writes + reads)
++                    dml_ratio = writes / denom
++                    out[relname] = {
++                        "rows": float(n_live_tup),
++                        "dml_ratio_raw": float(dml_ratio),
++                        "ins": float(ins),
++                        "upd": float(upd),
++                        "del": float(dele),
++                        "reads": float(reads),
++                    }
++            except Exception as e:
++                logger.debug("TableStats: pg_stat_user_tables fetch failed: %s", e)
++
++            # 2) pg_class.reltuples fallback for missing tables or 0 rows
++            missing = [t for t in chunk if t not in out or float(out[t].get("rows", 0.0)) <= 0.0]
++            if missing:
++                try:
++                    q2 = (
++                        "SELECT lower(c.relname) AS relname, COALESCE(c.reltuples, 0)::float8 AS reltuples "
++                        "  FROM pg_class c "
++                        "  JOIN pg_namespace n ON n.oid = c.relnamespace "
++                        " WHERE c.relkind = 'r' "
++                        "   AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
++                        "   AND lower(c.relname) = ANY(%s)"
++                    )
++                    rows2 = self.db_con.exec_fetchall_params(q2, (missing,))
++                    for relname, reltuples in rows2 or []:
++                        relname = str(relname).lower()
++                        if relname not in out:
++                            out[relname] = {"rows": float(reltuples), "dml_ratio_raw": 0.0}
++                        else:
++                            out[relname]["rows"] = max(float(out[relname].get("rows", 0.0)), float(reltuples))
++                except Exception as e:
++                    logger.debug("TableStats: pg_class.reltuples fetch failed: %s", e)
++
++        return out
++
++    @staticmethod
++    def _prune_qi_tables(qi: QueryInfo, drop_tbls: Set[str]) -> None:
++        if not drop_tbls:
++            return
++        # Normalize drop set once
++        drop_tbls = {str(t).lower() for t in drop_tbls}
++
++        def _drop_from_dict(d: Dict[str, Any]) -> None:
++            for t in list(d.keys()):
++                if str(t).lower() in drop_tbls:
++                    d.pop(t, None)
++
++        # roles + tables
++        for t in list(getattr(qi, "roles", {}).keys()):
++            if str(t).lower() in drop_tbls:
++                qi.roles.pop(t, None)
++        try:
++            qi.tables = {t for t in qi.tables if str(t).lower() not in drop_tbls}
++        except Exception:
++            pass
++
++        # physical signals
++        _drop_from_dict(qi.scan_cost)
++        _drop_from_dict(qi.plan_rows)
++        _drop_from_dict(qi.base_rows)
++        _drop_from_dict(qi.scan_type)
++        _drop_from_dict(qi.quality_flags)
++        _drop_from_dict(qi.table_risk)
++
++    def generate(
++        self,
++        workload_lines: Sequence[str],
++        old_conf: Set[IndexKey],
++        mu_table: Dict[IndexKey, float],
++        *,
++        topk: int = 1000,
++        tau: float = 0.05,
++        rho: float = 0.7,  # kept for API compatibility (unused in 2.0 ranker)
++        cap_family: int = 2,  # kept for API compatibility
++        cols_per_table: int = 12,
++        m_single: int = 8,
++        warmup_rounds: int = 0,
++        coverage_target: float = 0.90,
++        coverage_boost: bool = True,  # kept for API compatibility
++        # seed / role knobs
++        top_E: int = 5,
++        top_R: int = 3,
++        top_J: int = 5,
++        seed_limit_per_table: int = 50,
++        # compatibility knobs (kept for AdaSelect++ v6.3.1 wiring)
++        min_table_rows: int = 0,
++        max_dml_ratio: float = 1.0,
++        enable_table_filter: bool = False,
++        table_stats_batch_size: int = 200,
++        dml_ema_alpha: float = 0.30,
++        dml_ema_tau_sec: float = 0.0,
++        # DML-aware *soft* downweight (never hard ban here)
++        dml_soft_enable: bool = True,
++        dml_soft_k: float = 2.0,
++        dml_soft_min: float = 0.20,
++
++    ) -> GenerationResult:
++        t0 = time.time()
++
++        # configure enumerator
++        self.enum.tau_cooc = float(tau)
++        self.enum.cols_per_table = int(cols_per_table)
++        self.enum.m_single = int(m_single)
++        self.enum.top_E = int(top_E)
++        self.enum.top_R = int(top_R)
++        self.enum.top_J = int(top_J)
++        self.enum.seed_limit_per_table = int(seed_limit_per_table)
++
++        # 1) extract
++        q_infos: List[QueryInfo] = self.extractor.extract(workload_lines)
++        # Debug: basic extractor signal (helps catch empty-role bugs quickly)
++        try:
++            _tset = set()
++            for _qi in q_infos:
++                _tset |= set(getattr(_qi, "tables", []) or [])
++            logger.info("WDCG.gen: extracted q=%d tables=%d plan=%s", len(q_infos), len(_tset), str(getattr(self.extractor, "use_plan", False)))
++        except Exception:
++            pass
++
++        # 1.5) Table-level pruning & stats wiring (rows + DML churn)
++        # - hard filter: rows < min_table_rows -> drop table roles before rank/select
++        # - soft downweight: high DML churn -> later multiply WDCG scores
++        pruned_tables: Set[str] = set()
++        dml_snapshot: Dict[str, float] = {}
++        dml_ema_snapshot: Dict[str, float] = {}
++        rows_snapshot: Dict[str, float] = {}
++
++        if bool(enable_table_filter) and self.db_con is not None:
++            try:
++                all_tbls: List[str] = []
++                for qi in q_infos:
++                    for t in (qi.tables or set()):
++                        all_tbls.append(str(t))
++
++                stats_map = self._fetch_table_stats(all_tbls, batch_size=int(table_stats_batch_size))
++                now_ts = time.time()
++
++                # update caches
++                for t_raw, st in (stats_map or {}).items():
++                    t = self._norm_tbl_name(t_raw)
++                    rows = float(st.get("rows", 0.0) or 0.0)
++                    if rows > 0.0:
++                        self._tbl_rows[t] = rows
++                    rows_snapshot[t] = float(self._tbl_rows.get(t, rows) or rows)
++
++                    dml_r = float(st.get("dml_ratio_raw", 0.0) or 0.0)
++                    dml_snapshot[t] = dml_r
++                    self._tbl_dml_ratio[t] = dml_r
++
++                    # EMA update (either fixed alpha or time-constant based)
++                    old = float(self._tbl_dml_ema.get(t, dml_r) or dml_r)
++                    a = float(dml_ema_alpha)
++                    if float(dml_ema_tau_sec) > 0.0:
++                        last_ts = float(self._tbl_last_ts.get(t, now_ts) or now_ts)
++                        dt = max(0.0, now_ts - last_ts)
++                        tau = max(1e-9, float(dml_ema_tau_sec))
++                        a = math.exp(-dt / tau)
++                    a = max(0.0, min(1.0, a))
++                    ema = a * old + (1.0 - a) * dml_r
++                    self._tbl_dml_ema[t] = float(ema)
++                    self._tbl_last_ts[t] = float(now_ts)
++                    dml_ema_snapshot[t] = float(ema)
++
++                    # hard filter by rows (unknown rows -> never hard kill)
++                    if int(min_table_rows) > 0 and rows > 0.0 and rows < float(min_table_rows):
++                        pruned_tables.add(t)
++
++                # wire base_rows into each QueryInfo (helps selectivity scoring)
++                for qi in q_infos:
++                    for t in list(qi.tables or set()):
++                        tn = self._norm_tbl_name(str(t))
++                        rows = float(self._tbl_rows.get(tn, 0.0) or 0.0)
++                        if rows > 0.0:
++                            qi.base_rows[str(t).lower()] = rows
++
++                # prune small tables BEFORE enumerator/ranker
++                if pruned_tables:
++                    for qi in q_infos:
++                        self._prune_qi_tables(qi, pruned_tables)
++            except Exception as e:
++                logger.debug("TableFilter: wiring/prune failed: %s", e)
++
++        # 2) update stats
++        self.enum.update_stats(q_infos)
++
++        # 3) enumerate candidates from the current micro-batch only.
++        # IMPORTANT: do NOT inject the existing configuration into every query's candidate set;
++        # query_indexes[i] must only contain indexes that are relevant to query i.
++        per_query_raw = self.enum.enumerate_candidates(q_infos)
++
++        # 3.5) Pair Completion + Anchor Set
++        # Goal: patch structural recall holes of WDCG (esp. Join×Filter synergy pairs)
++        # while staying JOB-safe (bounded additions, only for tables already in the query set).
++        pair_added = 0
++        anchor_added = 0
++        anchor_old_conf_added = 0
++        anchor_mu_added = 0
++
++        # Helper: sort columns by (freq desc, name asc)
++        def _top_cols(tbl: str, cols: Sequence[str], k: int) -> List[str]:
++            uniq: List[str] = []
++            seen: Set[str] = set()
++            for c in cols:
++                c = str(c).lower()
++                if c and c not in seen:
++                    uniq.append(c)
++                    seen.add(c)
++            uniq.sort(key=lambda c: (-float(self.enum.freq_map.get((tbl, c), 0.0)), c))
++            return uniq[: max(0, int(k))]
++
++        # Precompute mu anchors per table (small, bounded)
++        mu_anchor_per_table = 2
++        mu_anchors_by_tbl: Dict[str, List[IndexKey]] = {}
++        if isinstance(mu_table, dict) and mu_table:
++            tmp: Dict[str, List[Tuple[float, IndexKey]]] = {}
++            for k, v in mu_table.items():
++                try:
++                    tbl, cols = k
++                    tbl = str(tbl).lower()
++                    if not isinstance(cols, tuple) or not cols:
++                        continue
++                    mu = float(v)
++                    if mu <= 0.0:
++                        continue
++                    tmp.setdefault(tbl, []).append((mu, k))
++                except Exception:
++                    continue
++            for tbl, items in tmp.items():
++                items.sort(key=lambda x: (-x[0], x[1][1]))
++                mu_anchors_by_tbl[tbl] = [k for _, k in items[:mu_anchor_per_table]]
++
++        # Old-conf anchors: always consider currently materialized indexes on touched tables.
++        old_conf_set: Set[IndexKey] = set(old_conf) if isinstance(old_conf, set) else set()
++
++        # Bounded pair completion per table.
++        # Keep tiny (JOB-safe): at most 2 join cols × 2 filter cols × 2 orders = 8 per table per query.
++        pair_top_join = 2
++        pair_top_filter = 2
++
++        for qi, qset in zip(q_infos, per_query_raw):
++            # anchors by table presence
++            touched_tables = set(str(t).lower() for t in getattr(qi, "tables", set()) or set())
++
++            # 3.5.1) Anchor: old configuration indexes for touched tables
++            for k in old_conf_set:
++                try:
++                    tbl, cols = k
++                    tbl = str(tbl).lower()
++                    if tbl in touched_tables and k not in qset:
++                        qset.add(k)
++                        anchor_added += 1
++                        anchor_old_conf_added += 1
++                        # meta for selector caps
++                        if isinstance(getattr(self.enum, "last_meta", None), dict) and k not in self.enum.last_meta:
++                            self.enum.last_meta[k] = {"table": tbl, "width": len(cols), "family": "ANCHOR", "has_filter": True}
++                        # mark as seed to guarantee it can survive selector pruning
++                        if isinstance(getattr(self.enum, "last_seed_set", None), set):
++                            self.enum.last_seed_set.add(k)
++                except Exception:
++                    continue
++
++            # 3.5.2) Anchor: top historical-positive mu indexes per touched table (bounded)
++            for tbl in touched_tables:
++                for k in mu_anchors_by_tbl.get(tbl, []):
++                    if k not in qset:
++                        qset.add(k)
++                        anchor_added += 1
++                        anchor_mu_added += 1
++                        if isinstance(getattr(self.enum, "last_meta", None), dict) and k not in self.enum.last_meta:
++                            try:
++                                _, cols = k
++                                self.enum.last_meta[k] = {"table": tbl, "width": len(cols), "family": "ANCHOR_MU", "has_filter": True}
++                            except Exception:
++                                pass
++
++            # 3.5.3) Pair completion: Join×Filter (including both orders) per touched big table
++            # Only for tables that have both join keys and filter keys in this query.
++            roles = getattr(qi, "roles", {}) or {}
++            for tbl, rc in roles.items():
++                tbl = str(tbl).lower()
++                if tbl not in touched_tables:
++                    continue
++                # respect table pruning if enabled (rows_snapshot is already applied to qi.tables, but be safe)
++                if int(min_table_rows) > 0:
++                    try:
++                        rows = float(getattr(qi, "base_rows", {}).get(tbl, 0.0))
++                        if rows > 0.0 and rows < float(min_table_rows):
++                            continue
++                    except Exception:
++                        pass
++
++                join_cols = _top_cols(tbl, getattr(rc, "join_eq", []) or [], pair_top_join)
++                # filter = eq + rng (join×range is the common blind spot; include both)
++                filter_cols = _top_cols(tbl, list((getattr(rc, "filter_eq", []) or []) + (getattr(rc, "filter_rng", []) or [])), pair_top_filter)
++                if not join_cols or not filter_cols:
++                    continue
++
++                for j in join_cols:
++                    for f in filter_cols:
++                        if not j or not f or j == f:
++                            continue
++                        k1: IndexKey = (tbl, (j, f))
++                        k2: IndexKey = (tbl, (f, j))
++                        if k1 not in qset:
++                            qset.add(k1)
++                            pair_added += 1
++                            if isinstance(getattr(self.enum, "last_meta", None), dict) and k1 not in self.enum.last_meta:
++                                self.enum.last_meta[k1] = {"table": tbl, "width": 2, "family": "PAIR_JF", "has_filter": True}
++                        if k2 not in qset:
++                            qset.add(k2)
++                            pair_added += 1
++                            if isinstance(getattr(self.enum, "last_meta", None), dict) and k2 not in self.enum.last_meta:
++                                self.enum.last_meta[k2] = {"table": tbl, "width": 2, "family": "PAIR_JF", "has_filter": True}
++
++        raw_union: Set[IndexKey] = set()
++        for s in per_query_raw:
++            raw_union.update(s)
++
++        # 4) rank (mu used as a weak exploration prior)
++        use_mu = not (int(warmup_rounds) > 0 and self._round < int(warmup_rounds))
++        mu_init = 0.25
++        mu_decay = 0.90
++        per_query_ranked, score_map = self.ranker.rank(
++            q_infos,
++            per_query_raw,
++            freq_map=self.enum.freq_map,
++            mu_prior=(mu_table if use_mu else None),
++            mu_init=mu_init if use_mu else 0.0,
++            mu_decay=mu_decay,
++        )
++
++        # 4.5) DML-aware *soft* downweight (score *= decay(table))
++        dml_weight_min = 1.0
++        dml_weight_max = 1.0
++        dml_tables_downweighted: Set[str] = set()
++        if bool(enable_table_filter) and bool(dml_soft_enable) and float(max_dml_ratio) < 1.0:
++            th = max(0.0, min(1.0, float(max_dml_ratio)))
++            k = max(0.0, float(dml_soft_k))
++            wmin = max(0.0, min(1.0, float(dml_soft_min)))
++            for idx in list(score_map.keys()):
++                tbl, _cols = idx
++                t = self._norm_tbl_name(str(tbl))
++                ema = float(self._tbl_dml_ema.get(t, self._tbl_dml_ratio.get(t, 0.0)) or 0.0)
++                w = 1.0
++                if ema > th and th < 1.0:
++                    x = (ema - th) / max(1e-6, (1.0 - th))
++                    w = max(wmin, math.exp(-k * x))
++                    dml_tables_downweighted.add(t)
++                score_map[idx] = float(score_map.get(idx, 0.0)) * float(w)
++                dml_weight_min = min(dml_weight_min, float(w))
++                dml_weight_max = max(dml_weight_max, float(w))
++
++        # 5) guarded Top-K selection
++        selected, sel_stats = self.selector.select(
++            score_map,
++            q_infos,
++            per_query_candidates=[set(s) for s in per_query_raw],
++            topk=topk,
++            coverage_target=coverage_target,
++            meta_map=self.enum.last_meta,
++            seed_set=self.enum.last_seed_set,
++        )
++
++        # 6) per-query candidate sets for later phases
++        query_indexes: List[Set[IndexKey]] = []
++        for s in per_query_raw:
++            query_indexes.append(set(x for x in s if x in selected))
++
++        elapsed_ms = (time.time() - t0) * 1000.0
++
++        stats: Dict[str, Any] = {
++            "candidate_count_raw": int(len(raw_union)),
++            "wdcg_pruned_count": int(sel_stats.get("wdcg_pruned_count", len(selected))),
++            "coverage_ratio": float(sel_stats.get("coverage_ratio", 0.0)),
++            "seed_recall": float(sel_stats.get("seed_recall", 0.0)),
++            "width2_ratio": float(sel_stats.get("width2_ratio", 0.0)),
++            "jj_width2_ratio": float(sel_stats.get("jj_width2_ratio", 0.0)),
++            "wdcg_elapsed_ms": float(elapsed_ms),
++            "wdcg_warmup_active": (not use_mu),
++            "table_filter_enabled": bool(enable_table_filter),
++            "min_table_rows": int(min_table_rows),
++            "pruned_small_tables": int(len(pruned_tables)),
++            "pruned_small_tables_list": ",".join(sorted(list(pruned_tables))[:50]) if pruned_tables else "",
++            "dml_threshold": float(max_dml_ratio),
++            "dml_soft_enable": bool(dml_soft_enable),
++            "dml_soft_k": float(dml_soft_k),
++            "dml_soft_min": float(dml_soft_min),
++            "dml_tables_downweighted": int(len(dml_tables_downweighted)),
++            "dml_weight_min": float(dml_weight_min),
++            "dml_weight_max": float(dml_weight_max),
++
++            # Pair completion + anchors (recall guardrails)
++            "pair_completion_added": int(pair_added),
++            "pair_completion_tables": int(len(pair_tables)),
++            "pair_completion_tables_list": ",".join(sorted(list(pair_tables))[:50]) if pair_tables else "",
++            "anchor_old_conf_added": int(anchor_old_added),
++            "anchor_mu_added": int(anchor_mu_added),
++            "anchor_total_added": int(anchor_old_added + anchor_mu_added),
++        }
++        stats.update(sel_stats)
++
++        # ----------------- Falsifiable diagnostics (3-step) -----------------
++        # Step A: for each selected index x, count how many queries it affects:
++        #   aff(x) = |{i | x in query_indexes[i]}|
++        # Step B: predicted what-if calls under "only-run-relevant-queries" equals sum_x aff(x).
++        # Step C: semantic contract: query_indexes[i] must only include indexes relevant to query i.
++        try:
++            aff: Dict[IndexKey, int] = {idx: 0 for idx in selected}
++            for qset in query_indexes:
++                for idx in qset:
++                    if idx in aff:
++                        aff[idx] += 1
++            if aff:
++                aff_vals = list(aff.values())
++                aff_vals.sort()
++                n = len(aff_vals)
++                p90 = aff_vals[int(0.9 * (n - 1))] if n > 1 else aff_vals[0]
++                aff_max = aff_vals[-1]
++                aff_avg = float(sum(aff_vals)) / float(max(1, n))
++                predicted_calls = int(sum(aff_vals))
++                # flag suspicious "global" candidates
++                suspicious_th = max(4, int(round(0.8 * len(query_indexes))))
++                suspicious = [(a, idx) for idx, a in aff.items() if a >= suspicious_th]
++                suspicious.sort(key=lambda t: (-t[0], t[1][0], t[1][1]))
++                top_susp = suspicious[:20]
++
++                stats.update(
++                    {
++                        "aff_avg": float(aff_avg),
++                        "aff_p90": int(p90),
++                        "aff_max": int(aff_max),
++                        "predicted_what_if_calls": int(predicted_calls),
++                        "suspicious_aff_count": int(len(suspicious)),
++                    }
++                )
++
++                if top_susp:
++                    # concise printable offenders for quick falsification
++                    stats["suspicious_aff_top"] = ";".join(
++                        [f"{a}:{t}:{','.join(cols)}" for a, (t, cols) in top_susp]
++                    )
++                    logger.warning(
++                        "WDCG.diag: suspicious aff>=%.2f|w| detected (top=%s)",
++                        0.8,
++                        str(stats["suspicious_aff_top"]),
++                    )
++        except Exception as _e:
++            logger.debug("WDCG.diag: aff computation failed: %s", _e)
++
++        self._round += 1
++
++        try:
++            logger.info("WDCG.gen: raw=%d scored=%d selected=%d", len(raw_union), len(score_map), len(selected))
++            if len(raw_union) == 0:
++                logger.warning("WDCG.gen: empty candidate union; extractor_stats=%s", self.extractor.get_stats())
++        except Exception:
++            pass
++        return GenerationResult(
++            query_indexes=query_indexes,
++            topk_set=set(selected),
++            wdcg_score_map=dict(score_map),
++            stats=stats,
++        )

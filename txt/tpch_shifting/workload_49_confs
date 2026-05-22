@@ -1,0 +1,21 @@
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('s_name',))	1878275870.8899999
+(('l_discount',), ('l_partkey',), ('l_shipdate',), ('l_suppkey',), ('o_custkey',), ('o_orderdate',), ('p_name',), ('ps_availqty',), ('s_name',), ('s_nationkey',))	1879134510.6699998
+(('l_discount',), ('l_extendedprice',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	74091510.92999983
+(('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('l_suppkey',), ('o_orderdate',), ('p_name',), ('ps_availqty',), ('s_name',), ('s_nationkey',))	1879061768.7199998
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_partkey',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('s_name',))	1878268142.4899998
+(('c_phone',), ('l_discount',), ('l_extendedprice',), ('l_quantity',), ('l_receiptdate',), ('l_shipdate',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	74083782.52999997
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_partkey',), ('l_receiptdate',), ('l_shipdate',), ('l_suppkey',), ('o_custkey',), ('p_name',), ('ps_availqty',))	1879126676.57
+(('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_quantity',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	74011040.57999992
+(('l_commitdate',), ('l_partkey',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('p_name',), ('ps_availqty',), ('s_address',))	1878275856.6299999
+(('c_phone',), ('l_commitdate',), ('l_discount',), ('l_partkey',), ('l_quantity',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('s_nationkey',))	1878268233.9299998
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_discount',), ('l_quantity',), ('l_shipdate',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('s_name',))	1860811961.35
+(('c_phone',), ('l_partkey',), ('l_quantity',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	1878268233.9299998
+(('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('l_shipdate',), ('l_suppkey',), ('o_orderdate',), ('p_name',), ('s_name',), ('s_nationkey',))	1879061768.7199998
+(('c_acctbal',), ('c_phone',), ('l_commitdate',), ('l_extendedprice',), ('l_partkey',), ('l_receiptdate',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('ps_availqty',))	1878268142.4899998
+(('l_receiptdate',), ('n_name',), ('l_partkey',), ('ps_availqty',), ('l_discount',), ('l_shipdate',), ('o_custkey',), ('l_extendedprice',), ('p_name',), ('l_commitdate',))	1878268128.2299998
+(('c_acctbal',), ('l_discount',), ('l_partkey',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('p_name',), ('ps_availqty',), ('s_name',))	1879134419.2299998
+(('c_acctbal',), ('c_phone',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('p_name',), ('ps_availqty',))	1878268142.4899998
+(('l_commitdate',), ('l_discount',), ('l_extendedprice',), ('l_partkey',), ('l_receiptdate',), ('n_name',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	1878268233.9299998
+(('l_commitdate',), ('l_discount',), ('l_partkey',), ('l_shipdate',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	1878275962.33
+(('l_commitdate',), ('l_extendedprice',), ('l_partkey',), ('l_quantity',), ('l_receiptdate',), ('n_name',), ('o_custkey',), ('p_name',), ('ps_availqty',), ('s_nationkey',))	1878268233.9299998
+1879735523.9199998

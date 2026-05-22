@@ -1,0 +1,109 @@
+./scripts/adaselect.sh --debug
+./scripts/liteselectmc_topk.sh --debug
+
+
+DEBUG=1 ./scripts/adaselect.sh
+DEBUG=1 ./scripts/liteselectmc_topk.sh
+
+
+unzip AdaSelectPP20260126_v0_5_supportgate_sweep_ready.zip
+cd AdaSelectPP20260126_v0_5_supportgate_sweep_ready
+
+# 4 组合 sweep（可选 TRACE=1 生成 trace）
+TRACE=1 FIXED_LAMBDA=0.65 MIN_WIDTH=1 MAX_WIDTH=2 \
+  ./scripts/sweep_adaselect_lambda_wdcg.sh
+
+# 出问题想看全量日志
+DEBUG=1 TRACE=1 ./scripts/sweep_adaselect_lambda_wdcg.sh
+
+# 分析（默认 glob 会抓 log/adaselect_*.csv）
+python scripts/analyze_lambda_wdcg_sweep.py --bench tpch --wtype shifting
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+smoke 的目的只有一个：**用 10–30 秒把“会不会崩、WDCG 路径有没有真的跑起来、pair/anchor/gating 有没有触发”先验收掉**，避免你再跑几小时才发现 NameError / fallback。
+
+下面给你两种最稳的用法（推荐用法 1）。
+
+---
+
+## 用法 1（推荐）：直接只跑第 0 轮（invoke=[0]）
+
+你不用改任何脚本，直接在项目根目录跑一条命令即可（只跑 round0 的一个 micro-workload）：
+
+```bash
+cd AdaSelectPP
+
+PYTHONUNBUFFERED=1 python -u adasel/main.py \
+  AdaSelect tpch shifting 5 "[0]" optimizer \
+  --alpha 0.55 --beta 1.1 --optimizer_ratio 0.5 \
+  --min_width 1 --max_width 2 \
+  --lambda_policy adaptive \
+  --wdcg_enabled 1 \
+  --debug --trace
+```
+
+### 你要看到什么才算 smoke 通过
+
+1. **程序不崩**（最关键）
+2. log 里**没有**这类字样：
+
+   * `WDCG candidate funnel FAILED`
+   * `falling back to baseline generation`
+3. per_round / trace 里能看到 WDCG 路径相关字段不是全 0（比如：
+
+   * `pair_completion_added`
+   * `anchor_*_added`
+   * `dml_tables_downweighted` 等）
+
+> 通过后你再跑完整 `0-78`，这时可以关掉 debug/trace（除非你要定位问题）。
+
+---
+
+## 用法 2：用脚本做 smoke（把 range 改成 0-0）
+
+如果你坚持用 `scripts/sweep_adaselect_lambda_wdcg.sh` 或 `scripts/adaselect.sh` 跑，那就把 CASE 里的 range 临时改成 `0-0`：
+
+例如把
+
+```
+"tpch  shifting  5   0-78    0.55 1.1  0.5"
+```
+
+临时改成
+
+```
+"tpch  shifting  5   0-0     0.55 1.1  0.5"
+```
+
+然后跑（带 debug/trace）：
+
+```bash
+TRACE=1 ./scripts/sweep_adaselect_lambda_wdcg.sh --debug
+```
+
+> 这就是脚本版 smoke：只验证 round0 不崩、WDCG 真走通。
+
+---
+
+## smoke 之后怎么跑长实验（避免“又慢又乱”）
+
+* **长跑 4 组合**：建议 `debug=OFF`，`trace=OFF`（或只开轻量 per_round）
+* **只在关键 case 开 trace**：例如 `tpchs_random wdcg=1`、`job_noisy adaptive wdcg=1`
+* **只有出异常才开 debug**：exec 爆炸、λ 两极化异常、候选数突然很小等
+
+---
+
+## 额外建议（强烈）：给 smoke 单独输出目录
+
+避免污染你之前的大实验目录：
+
+```bash
+export OUTDIR="results_smoke_$(date +%m%d_%H%M)"
+```
+
+（如果你们代码支持 `--outdir/--result_dir` 就加上；不支持就忽略）
+
+---
+
+如果你把你现在跑的那条命令（或脚本实际展开后的 python 命令行）贴出来，我可以帮你把 smoke 版命令**精确对齐你当前参数**（尤其是 `--opratio/--optimizer_ratio`、`--wdcg_enabled`、`--trace` 这些 flag 名）。

@@ -1,0 +1,612 @@
+--- lite_select_mc_topk.py
++++ lite_select_mc_topk.py
+@@ -15,6 +15,9 @@
+ import json
+ import logging
+ import re
++import hashlib
++import math
++from collections import Counter, defaultdict
+ from typing import Any, Dict, List, Optional, Set, Tuple
+ 
+ from util.workload_parser import WorkloadParser
+@@ -64,6 +67,305 @@
+                 kept.add(ent)
+     return kept
+ 
++
++
++# ---------------------------------------------------------------------------
++# Phase 0.5 option: WDCG-based candidate pruning / ordering (plan-first)
++# ---------------------------------------------------------------------------
++
++# Plan regexes (borrowed from the hardened plan-first TemplateExtractor).
++_CMT_BLOCK = re.compile(r"/\*.*?\*/", re.S)
++_CMT_LINE = re.compile(r"--[^\n]*")
++_COLREF_RE = re.compile(r'"?([A-Za-z_][\w$]*)"?\s*\.\s*"?(?P<col>[A-Za-z_][\w$]*)"?')
++_JOIN_EQ_RE = re.compile(
++    r'"?([A-Za-z_][\w$]*)"?\s*\.\s*"?(?P<c1>[A-Za-z_][\w$]*)"?(?:\s*::\s*[\w\.]+)?\s*=\s*'
++    r'"?([A-Za-z_][\w$]*)"?\s*\.\s*"?(?P<c2>[A-Za-z_][\w$]*)"?(?:\s*::\s*[\w\.]+)?',
++    re.I,
++)
++_EQ_OP_RE = re.compile(r"(?<![<>=!])=(?![<>=])|\b(in)\b|\b(is)\b", re.I)
++_RNG_OP_RE = re.compile(r"<=|>=|<|>|\b(between)\b|\b(like)\b|\bilike\b|\bsimilar\b", re.I)
++
++
++def _strip_sql_comments(sql: str) -> str:
++    sql = sql or ""
++    sql = _CMT_BLOCK.sub(" ", sql)
++    sql = _CMT_LINE.sub(" ", sql)
++    return sql
++
++
++def _strip_literals_for_sig(sql: str) -> str:
++    """Best-effort SQL canonicalization for cache keys (no heavy parser)."""
++    s = _strip_sql_comments(sql or "")
++    # strings
++    s = re.sub(r"'(?:''|[^'])*'", "?", s)
++    # numbers (ints/floats)
++    s = re.sub(r"\b\d+(?:\.\d+)?\b", "?", s)
++    # whitespace
++    s = re.sub(r"\s+", " ", s).strip().lower()
++    return s
++
++
++def _sql_sig(sql: str) -> str:
++    s = _strip_literals_for_sig(sql)
++    return hashlib.md5(s.encode("utf-8", errors="ignore")).hexdigest()
++
++
++def _norm_ident(x: str) -> str:
++    x = (x or "").strip()
++    if x.startswith('"') and x.endswith('"') and len(x) >= 2:
++        x = x[1:-1]
++    if "." in x:
++        x = x.split(".")[-1]
++    return x.strip()
++
++
++class _PlanRoleExtractor:
++    """Extract (table -> role -> Counter[col]) from Postgres JSON plan."""
++
++    def __init__(self, db_con) -> None:
++        self.db_con = db_con
++        self._plan_cache: Dict[str, Dict[str, Any]] = {}  # sig -> root node
++        self._rows_cache: Dict[str, float] = {}
++
++    # ---- plan IO ----
++    def get_root_plan(self, sql: str) -> Optional[Dict[str, Any]]:
++        sig = _sql_sig(sql)
++        if sig in self._plan_cache:
++            return self._plan_cache[sig]
++
++        plan_obj: Any = None
++        if hasattr(self.db_con, "get_plan"):
++            try:
++                plan_obj = self.db_con.get_plan(sql)  # type: ignore[attr-defined]
++            except Exception:
++                plan_obj = None
++
++        if plan_obj is None:
++            # fallback: run EXPLAIN ourselves (FORMAT JSON returns a single row with a JSON array)
++            try:
++                rows = self.db_con.exec_fetchall(f"EXPLAIN (FORMAT JSON, VERBOSE) {sql}")  # type: ignore[attr-defined]
++                if rows and rows[0]:
++                    plan_obj = rows[0][0]
++            except Exception:
++                plan_obj = None
++
++        root = self._extract_root_node(plan_obj)
++        if isinstance(root, dict):
++            self._plan_cache[sig] = root
++            return root
++        return None
++
++    @staticmethod
++    def _extract_root_node(plan_obj: Any) -> Optional[Dict[str, Any]]:
++        """Accept several common shapes: dict with Plan, dict node, list[dict], list[list]."""
++        if plan_obj is None:
++            return None
++        # if returned as JSON string
++        if isinstance(plan_obj, str):
++            try:
++                plan_obj = json.loads(plan_obj)
++            except Exception:
++                return None
++
++        # common: list with single dict
++        if isinstance(plan_obj, list) and plan_obj:
++            # EXPLAIN (FORMAT JSON) typically returns a list with one dict
++            first = plan_obj[0]
++            if isinstance(first, dict):
++                if "Plan" in first and isinstance(first["Plan"], dict):
++                    return first["Plan"]
++                if "Node Type" in first:
++                    return first
++            # sometimes nested list
++            if isinstance(first, list) and first and isinstance(first[0], dict):
++                inner = first[0]
++                if "Plan" in inner and isinstance(inner["Plan"], dict):
++                    return inner["Plan"]
++                if "Node Type" in inner:
++                    return inner
++
++        if isinstance(plan_obj, dict):
++            if "Plan" in plan_obj and isinstance(plan_obj["Plan"], dict):
++                return plan_obj["Plan"]
++            if "Node Type" in plan_obj:
++                return plan_obj
++        return None
++
++    # ---- table size (optional prune) ----
++    def reltuples(self, table: str) -> float:
++        t = _norm_ident(table)
++        if t in self._rows_cache:
++            return self._rows_cache[t]
++        rows = 0.0
++        try:
++            sql = (
++                "SELECT c.reltuples::float8 "
++                "  FROM pg_class c "
++                "  JOIN pg_namespace n ON n.oid = c.relnamespace "
++                f" WHERE n.nspname='public' AND c.relname='{t}'"
++            )
++            res = self.db_con.exec_fetchall(sql)  # type: ignore[attr-defined]
++            if res and res[0] and res[0][0] is not None:
++                rows = float(res[0][0])
++        except Exception:
++            rows = 0.0
++        self._rows_cache[t] = rows
++        return rows
++
++    # ---- extract roles ----
++    def extract_role_counters(self, sql: str, min_table_ratio: float = 0.0) -> Dict[str, Dict[str, Counter]]:
++        root = self.get_root_plan(sql)
++        if not isinstance(root, dict):
++            return {}
++
++        alias2table: Dict[str, str] = {}
++        tables: Set[str] = set()
++        self._collect_aliases(root, alias2table, tables)
++
++        # optional per-query small-table pruning
++        keep_tables = set(tables)
++        if min_table_ratio and len(tables) > 1:
++            try:
++                rows_map = {t: self.reltuples(t) for t in tables}
++                mx = max(rows_map.values()) if rows_map else 0.0
++                if mx > 0:
++                    thr = mx * float(min_table_ratio)
++                    keep_tables = {t for t, r in rows_map.items() if r >= thr}
++                    if not keep_tables:
++                        keep_tables = set(tables)
++                    if len(keep_tables) == 1 and len(tables) > 1:
++                        keep_tables = set(sorted(rows_map.keys(), key=lambda x: rows_map[x], reverse=True)[:2])
++            except Exception:
++                keep_tables = set(tables)
++
++        roles: Dict[str, Dict[str, Counter]] = {}
++        for t in keep_tables:
++            roles[t] = {
++                "join_eq": Counter(),
++                "filter_eq": Counter(),
++                "filter_rng": Counter(),
++                "group_by": Counter(),
++                "order_by": Counter(),
++            }
++
++        self._walk(root, alias2table, roles)
++        return roles
++
++    def _collect_aliases(self, node: Dict[str, Any], alias2table: Dict[str, str], tables: Set[str]) -> None:
++        rel = node.get("Relation Name")
++        if rel:
++            t = _norm_ident(str(rel))
++            tables.add(t)
++            alias = _norm_ident(str(node.get("Alias") or t))
++            if alias:
++                alias2table[alias] = t
++            alias2table[t] = t
++
++        for ch in node.get("Plans", []) or []:
++            if isinstance(ch, dict):
++                self._collect_aliases(ch, alias2table, tables)
++
++    def _walk(self, node: Dict[str, Any], alias2table: Dict[str, str], roles: Dict[str, Dict[str, Counter]]) -> None:
++        # join conditions
++        for key in ("Hash Cond", "Merge Cond", "Join Filter"):
++            expr = node.get(key)
++            if expr:
++                self._ingest_expr(str(expr), alias2table, roles, source="join")
++
++        # filters (Index Cond may include join keys under NLJ)
++        for key in ("Filter", "Index Cond", "Recheck Cond"):
++            expr = node.get(key)
++            if expr:
++                self._ingest_expr(str(expr), alias2table, roles, source="filter" if key != "Index Cond" else "index_cond")
++
++        # group/sort keys
++        gk = node.get("Group Key")
++        if isinstance(gk, list):
++            for e in gk:
++                self._ingest_key(str(e), alias2table, roles, role="group_by")
++        sk = node.get("Sort Key")
++        if isinstance(sk, list):
++            for e in sk:
++                self._ingest_key(str(e), alias2table, roles, role="order_by")
++
++        for ch in node.get("Plans", []) or []:
++            if isinstance(ch, dict):
++                self._walk(ch, alias2table, roles)
++
++    def _map_alias(self, alias: str, alias2table: Dict[str, str], roles: Dict[str, Dict[str, Counter]]) -> Optional[str]:
++        a = _norm_ident(alias)
++        if not a:
++            return None
++        t = alias2table.get(a)
++        if t and t in roles:
++            return t
++        if a in roles:
++            return a
++        return None
++
++    def _find_colrefs(self, expr: str) -> List[Tuple[str, str]]:
++        out: List[Tuple[str, str]] = []
++        for m in _COLREF_RE.finditer(expr or ""):
++            a = _norm_ident(m.group(1))
++            c = _norm_ident(m.group("col")).lower()
++            if a and c:
++                out.append((a, c))
++        return out
++
++    def _ingest_key(self, expr: str, alias2table: Dict[str, str], roles: Dict[str, Dict[str, Counter]], role: str) -> None:
++        for a, c in self._find_colrefs(expr):
++            t = self._map_alias(a, alias2table, roles)
++            if t:
++                roles[t][role][c] += 1
++
++    def _ingest_expr(self, expr: str, alias2table: Dict[str, str], roles: Dict[str, Dict[str, Counter]], source: str) -> None:
++        # 1) join pairs (col = col)
++        join_cols: Set[Tuple[str, str]] = set()
++        for m in _JOIN_EQ_RE.finditer(expr or ""):
++            a1 = _norm_ident(m.group(1))
++            c1 = _norm_ident(m.group("c1")).lower()
++            a2 = _norm_ident(m.group(3))
++            c2 = _norm_ident(m.group("c2")).lower()
++            t1 = self._map_alias(a1, alias2table, roles)
++            t2 = self._map_alias(a2, alias2table, roles)
++            if t1:
++                roles[t1]["join_eq"][c1] += 1
++                join_cols.add((a1, c1))
++            if t2:
++                roles[t2]["join_eq"][c2] += 1
++                join_cols.add((a2, c2))
++
++        # 2) classify as filter eq/rng
++        is_rng = bool(_RNG_OP_RE.search(expr or ""))
++        is_eq = bool(_EQ_OP_RE.search(expr or ""))
++
++        if not (is_rng or is_eq):
++            return
++
++        role_name = "filter_rng" if is_rng else "filter_eq"
++
++        for a, c in self._find_colrefs(expr):
++            # NLJ guard: when source is Index Cond, col=col should be treated as join, not filter.
++            if source == "index_cond" and (a, c) in join_cols:
++                continue
++            t = self._map_alias(a, alias2table, roles)
++            if t:
++                roles[t][role_name][c] += 1
++
++
++def _dcg_pos_weight(pos0: int) -> float:
++    """pos0 is 0-based; return 1/log2(2+pos)."""
++    return 1.0 / math.log2(2.0 + float(pos0))
++
++
++def _wdcg_score_index(cols: Tuple[str, ...], col_w: Dict[str, float]) -> float:
++    s = 0.0
++    for j, c in enumerate(cols):
++        w = col_w.get(c.lower(), 0.0)
++        if w <= 0:
++            continue
++        s += w * _dcg_pos_weight(j)
++    return s
+ 
+ # ---------------------------------------------------------------------------
+ # Parent tuner class
+@@ -98,9 +400,40 @@
+         self.max_width = 3
+         self.min_width = 1
+ 
++        # Phase 0.5 optional: WDCG-based candidate pruning / ordering.
++        # When enabled, we rank and prune candidates using plan-derived role columns
++        # (join/filter/group/order). This helps under recurrent/shifting workloads.
++        self.wdcg_enabled = False
++        self.wdcg_use_plan = True  # kept for symmetry with AdaSelect++; plan-first is recommended.
++        self.wdcg_topk = 1000
++        self.wdcg_family_cap = 2
++        self.wdcg_small_table_prune = True
++        self.wdcg_min_table_ratio = 0.05  # relative to max table size within a query
++
++        # role weights (can be overridden via cfg)
++        self.wdcg_w_join = 3.0
++        self.wdcg_w_filter_eq = 2.0
++        self.wdcg_w_filter_rng = 1.5
++        self.wdcg_w_group = 1.0
++        self.wdcg_w_order = 1.0
++
++        # internal extractor (initialized after cfg is loaded)
++        self._wdcg_extractor = None
++
++
+         # Load base & multi‑column configuration.
+         # If cfg_source is provided (dict), it overrides cfg_path without touching the JSON file.
+         self._load_cfg(cfg_source if cfg_source is not None else cfg_path)
++
++        # Initialize plan-first role extractor if WDCG is enabled.
++        if self.wdcg_enabled and self.db_con1 is not None:
++            try:
++                self._wdcg_extractor = _PlanRoleExtractor(self.db_con1)
++            except Exception:
++                self._wdcg_extractor = None
++        else:
++            self._wdcg_extractor = None
++
+ 
+         logger.info(
+             "cfg: K=%d α=%.2f β=%.2f ratio=%.2f timeout=%d mode=%s min_w=%d max_w=%d",
+@@ -174,6 +507,18 @@
+             # accept either {min,max}_width or {min,max}_index_width
+             self.max_width = cfg.get("max_width", cfg.get("max_index_width", self.max_width))
+             self.min_width = cfg.get("min_width", cfg.get("min_index_width", self.min_width))
++            # Phase 0.5 optional: WDCG knobs
++            self.wdcg_enabled = cfg.get("wdcg", cfg.get("wdcg_enabled", self.wdcg_enabled))
++            self.wdcg_use_plan = cfg.get("wdcg_use_plan", self.wdcg_use_plan)
++            self.wdcg_topk = int(cfg.get("wdcg_topk", self.wdcg_topk))
++            self.wdcg_family_cap = int(cfg.get("wdcg_family_cap", self.wdcg_family_cap))
++            self.wdcg_small_table_prune = bool(cfg.get("wdcg_small_table_prune", self.wdcg_small_table_prune))
++            self.wdcg_min_table_ratio = float(cfg.get("wdcg_min_table_ratio", self.wdcg_min_table_ratio))
++            self.wdcg_w_join = float(cfg.get("wdcg_w_join", self.wdcg_w_join))
++            self.wdcg_w_filter_eq = float(cfg.get("wdcg_w_filter_eq", self.wdcg_w_filter_eq))
++            self.wdcg_w_filter_rng = float(cfg.get("wdcg_w_filter_rng", self.wdcg_w_filter_rng))
++            self.wdcg_w_group = float(cfg.get("wdcg_w_group", self.wdcg_w_group))
++            self.wdcg_w_order = float(cfg.get("wdcg_w_order", self.wdcg_w_order))
+         except FileNotFoundError:
+             logger.warning("Config file not found: %s. Using defaults.", str(source))
+         except Exception as e:
+@@ -276,6 +621,92 @@
+         appearing = _merge_prefixes(appearing)
+         return query_indexes, appearing
+ 
++# --------------------------- Phase 0.5: WDCG pruning ---------------------------
++def _wdcg_prepare_eval(
++    self,
++    workload: List[str],
++    appearing: Set[IndexKey],
++) -> Tuple[Set[IndexKey], List[IndexKey]]:
++    """Return (eval_set, eval_order) based on WDCG scores.
++
++    eval_order is a list of candidates sorted by WDCG score (ties broken by
++    current benefit estimate). eval_set is top-k after family-cap pruning.
++    """
++    if not self.wdcg_enabled or not appearing:
++        return set(appearing), []
++
++    if self._wdcg_extractor is None:
++        # If extractor is unavailable, do NOT risk unstable SQL parsing.
++        return set(appearing), []
++
++    # 1) Aggregate per-table column weights from plan-derived roles.
++    col_w_by_table: Dict[str, Dict[str, float]] = defaultdict(dict)
++    min_ratio = self.wdcg_min_table_ratio if self.wdcg_small_table_prune else 0.0
++
++    for sql in workload:
++        try:
++            roles = self._wdcg_extractor.extract_role_counters(sql, min_table_ratio=min_ratio)
++        except Exception:
++            roles = {}
++        for tbl, rc in roles.items():
++            tbl = str(tbl)
++            col_w = col_w_by_table.setdefault(tbl, {})
++            for c, cnt in rc.get("join_eq", {}).items():
++                col_w[c] = col_w.get(c, 0.0) + float(cnt) * float(self.wdcg_w_join)
++            for c, cnt in rc.get("filter_eq", {}).items():
++                col_w[c] = col_w.get(c, 0.0) + float(cnt) * float(self.wdcg_w_filter_eq)
++            for c, cnt in rc.get("filter_rng", {}).items():
++                col_w[c] = col_w.get(c, 0.0) + float(cnt) * float(self.wdcg_w_filter_rng)
++            for c, cnt in rc.get("group_by", {}).items():
++                col_w[c] = col_w.get(c, 0.0) + float(cnt) * float(self.wdcg_w_group)
++            for c, cnt in rc.get("order_by", {}).items():
++                col_w[c] = col_w.get(c, 0.0) + float(cnt) * float(self.wdcg_w_order)
++
++    # 2) Score each candidate.
++    scored: List[Tuple[IndexKey, float, float]] = []
++    for idx in appearing:
++        tbl, cols = idx
++        col_w = col_w_by_table.get(tbl, {})
++        s = _wdcg_score_index(cols, col_w)
++        b = float(self.columns_benefit.get(idx, 0.0))
++        scored.append((idx, float(s), b))
++
++    scored.sort(key=lambda x: (x[1], x[2]), reverse=True)
++    eval_order = [x[0] for x in scored]
++
++    # 3) Apply family cap + top-k.
++    cap = int(self.wdcg_family_cap) if self.wdcg_family_cap is not None else 0
++    k = max(1, int(self.wdcg_topk)) if self.wdcg_topk is not None else len(eval_order)
++
++    fam_cnt: Dict[Tuple[str, str], int] = defaultdict(int)
++    picked: List[IndexKey] = []
++
++    for idx in eval_order:
++        if len(picked) >= k:
++            break
++        tbl, cols = idx
++        first = cols[0] if cols else ""
++        fam = (tbl, first)
++        if cap > 0 and fam_cnt[fam] >= cap:
++            continue
++        fam_cnt[fam] += 1
++        picked.append(idx)
++
++    # 4) Ensure per-table coverage (keep at least 1 per table if possible).
++    tbl2best: Dict[str, IndexKey] = {}
++    for idx, s, b in scored:
++        tbl = idx[0]
++        if tbl not in tbl2best:
++            tbl2best[tbl] = idx
++
++    picked_set = set(picked)
++    for tbl, best in tbl2best.items():
++        if tbl not in {i[0] for i in picked_set}:
++            picked_set.add(best)
++            picked.append(best)
++
++    return picked_set, picked
++
+     def _estimate_benefits(
+         self,
+         workload: List[str],
+@@ -288,32 +719,50 @@
+         self._last_eval_order.clear()
+ 
+         query_indexes, appearing = self._generate_and_merge_candidates(workload)
+-        self._m_stats["candidate_count"] += len(appearing)
+-        if not appearing:
++        appearing_full = set(appearing)
++        eval_set = set(appearing_full)
++        eval_order: List[IndexKey] = []
++
++        # Optional WDCG pruning/order (Phase 0.5).
++        if self.wdcg_enabled:
++            try:
++                eval_set, eval_order = self._wdcg_prepare_eval(workload, appearing_full)
++            except Exception:
++                eval_set, eval_order = set(appearing_full), []
++
++        # For stats, we count the candidates that will actually be considered in this round.
++        self._m_stats["candidate_count"] += len(eval_set)
++
++        if not eval_set:
+             return
+ 
+-        budget = len(appearing) if self.workload_count == 0 else max(
+-            1, int(self.optimizer_ratio * len(appearing))
++        budget = len(eval_set) if self.workload_count == 0 else max(
++            1, int(self.optimizer_ratio * len(eval_set))
+         )
+         trials = 0
+-
+-        # Record the priority order considered for evaluation (restricted to those
+-        # that appear in this round). This is useful to debug oscillations caused
+-        # by budget cut-off / rank boundary effects.
+-        self._last_eval_order = [
+-            idx_key
+-            for idx_key, _ in sorted(
+-                self.columns_benefit.items(), key=lambda kv: kv[1], reverse=True
+-            )
+-            if idx_key in appearing
+-        ]
+-
+-        for idx_key, _ in sorted(
+-            self.columns_benefit.items(), key=lambda kv: kv[1], reverse=True
+-        ):
++        # Record the priority order considered for evaluation.
++        # If WDCG returned an order, we use it (after pruning). Otherwise fall back to benefit order.
++        for k in eval_set:
++            self.columns_benefit.setdefault(k, 0.0)
++
++        if eval_order:
++            self._last_eval_order = [k for k in eval_order if k in eval_set]
++        else:
++            self._last_eval_order = [
++                idx_key
++                for idx_key, _ in sorted(
++                    self.columns_benefit.items(), key=lambda kv: kv[1], reverse=True
++                )
++                if idx_key in eval_set
++            ]
++            # Append unseen candidates deterministically (benefit=0)
++            for k in sorted(eval_set):
++                if k not in self._last_eval_order:
++                    self._last_eval_order.append(k)
++        for idx_key in self._last_eval_order:
+             if trials >= budget:
+                 break
+-            if idx_key not in appearing:
++            if idx_key not in eval_set:
+                 continue
+             self._test_candidate(
+                 idx_key, query_indexes, base_costs, base_total, old_conf, workload
+@@ -321,11 +770,13 @@
+             self._last_evaluated_set.add(idx_key)
+             trials += 1
+ 
++
+         self._m_stats["evaluated_count"] += trials
+-
+-        for key in self.columns_benefit:
+-            if key not in appearing:
++        decay_set = eval_set if self.wdcg_enabled else appearing_full
++        for key in list(self.columns_benefit.keys()):
++            if key not in decay_set:
+                 self.columns_benefit[key] *= self.alpha
++
+ 
+     def _test_candidate(
+         self,
+
+--- main.py
++++ main.py
+@@ -122,6 +122,12 @@
+     p.add_argument('--timeout', type=int, default=None, help='timeout threshold in ms')
+     p.add_argument('--min_width', type=int, default=None)
+     p.add_argument('--max_width', type=int, default=None)
++    # Phase 0.5 option: WDCG pruning/order (plan-first)
++    p.add_argument('--wdcg', action='store_true', help='Enable WDCG-based candidate pruning/order (plan-first).')
++    p.add_argument('--wdcg_topk', type=int, default=None, help='Top-K candidates kept after WDCG pruning (default: 1000).')
++    p.add_argument('--wdcg_family_cap', type=int, default=None, help='Per-(table, first-col) cap after WDCG ranking (default: 2).')
++    p.add_argument('--wdcg_min_table_ratio', type=float, default=None, help='Small-table prune ratio relative to max table per query (default: 0.05).')
++    p.add_argument('--wdcg_no_small_table_prune', action='store_true', help='Disable small-table pruning in WDCG ranking.')
+     p.add_argument('--transition_mode', type=str, default=None)
+ 
+     # Phase 0.3/0.4 trace
+@@ -186,6 +192,17 @@
+         setattr(algo, 'max_width', int(args.max_width))
+     if args.transition_mode is not None and hasattr(algo, 'transition_mode'):
+         setattr(algo, 'transition_mode', str(args.transition_mode))
++# Phase 0.5: WDCG knobs (only applied if algorithm exposes these attributes)
++if getattr(args, 'wdcg', False) and hasattr(algo, 'wdcg_enabled'):
++    setattr(algo, 'wdcg_enabled', True)
++if getattr(args, 'wdcg_topk', None) is not None and hasattr(algo, 'wdcg_topk'):
++    setattr(algo, 'wdcg_topk', int(args.wdcg_topk))
++if getattr(args, 'wdcg_family_cap', None) is not None and hasattr(algo, 'wdcg_family_cap'):
++    setattr(algo, 'wdcg_family_cap', int(args.wdcg_family_cap))
++if getattr(args, 'wdcg_min_table_ratio', None) is not None and hasattr(algo, 'wdcg_min_table_ratio'):
++    setattr(algo, 'wdcg_min_table_ratio', float(args.wdcg_min_table_ratio))
++if getattr(args, 'wdcg_no_small_table_prune', False) and hasattr(algo, 'wdcg_small_table_prune'):
++    setattr(algo, 'wdcg_small_table_prune', False)
+ 
+ 
+ def main() -> None:
+@@ -219,6 +236,18 @@
+         cfg_obj['max_width'] = int(args.max_width)
+     if args.transition_mode is not None:
+         cfg_obj['transition_mode'] = str(args.transition_mode)
++
++# Phase 0.5: WDCG options (only used by algorithms that implement it)
++if getattr(args, 'wdcg', False):
++    cfg_obj['wdcg'] = True
++    if args.wdcg_topk is not None:
++        cfg_obj['wdcg_topk'] = int(args.wdcg_topk)
++    if args.wdcg_family_cap is not None:
++        cfg_obj['wdcg_family_cap'] = int(args.wdcg_family_cap)
++    if args.wdcg_min_table_ratio is not None:
++        cfg_obj['wdcg_min_table_ratio'] = float(args.wdcg_min_table_ratio)
++    if getattr(args, 'wdcg_no_small_table_prune', False):
++        cfg_obj['wdcg_small_table_prune'] = False
+ 
+     alpha_name = args.alpha if args.alpha is not None else cfg_obj.get('alpha', '')
+     beta_name = args.beta if args.beta is not None else cfg_obj.get('beta', '')

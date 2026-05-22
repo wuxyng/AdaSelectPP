@@ -1,0 +1,21 @@
+(('c_nationkey',), ('l_quantity',), ('l_receiptdate',), ('o_custkey',), ('o_orderstatus',), ('p_brand',), ('p_mfgr',), ('r_name',), ('s_nationkey',), ('s_phone',))	24664.270000000484
+(('l_commitdate',), ('l_extendedprice',), ('l_quantity',), ('l_receiptdate',), ('l_suppkey',), ('o_orderdate',), ('p_brand',), ('p_mfgr',), ('r_name',), ('s_phone',))	99603.31000000052
+(('c_nationkey',), ('l_shipinstruct',), ('l_shipmode',), ('o_custkey',), ('o_orderstatus',), ('p_brand',), ('p_container',), ('p_mfgr',), ('p_type',), ('s_nationkey',))	27397.810000000056
+(('l_commitdate',), ('l_quantity',), ('l_shipinstruct',), ('o_custkey',), ('o_orderstatus',), ('p_brand',), ('p_container',), ('p_mfgr',), ('p_type',), ('s_nationkey',))	27397.810000000056
+(('c_nationkey',), ('l_quantity',), ('l_receiptdate',), ('l_shipinstruct',), ('o_orderstatus',), ('p_mfgr',), ('p_size',), ('p_type',), ('s_nationkey',), ('s_phone',))	2284.350000000093
+(('c_nationkey',), ('l_receiptdate',), ('n_name',), ('o_custkey',), ('o_orderdate',), ('o_orderstatus',), ('p_brand',), ('p_mfgr',), ('r_name',), ('s_nationkey',))	24664.270000000484
+(('c_nationkey',), ('l_quantity',), ('l_receiptdate',), ('n_name',), ('o_custkey',), ('o_orderstatus',), ('p_container',), ('p_mfgr',), ('r_name',), ('s_nationkey',))	23034.010000000242
+(('l_quantity',), ('l_receiptdate',), ('l_shipinstruct',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('p_brand',), ('p_mfgr',), ('s_acctbal',), ('s_phone',))	116711.88000000035
+(('l_commitdate',), ('l_quantity',), ('n_name',), ('o_custkey',), ('p_brand',), ('p_container',), ('p_mfgr',), ('p_type',), ('s_nationkey',), ('s_phone',))	27397.810000000056
+(('l_commitdate',), ('l_receiptdate',), ('l_shipinstruct',), ('l_shipmode',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('p_mfgr',), ('s_acctbal',), ('s_phone',))	112243.93999999994
+(('l_partkey',), ('l_receiptdate',), ('l_suppkey',), ('n_name',), ('o_custkey',), ('p_brand',), ('p_mfgr',), ('p_size',), ('s_acctbal',), ('s_phone',))	2154480.62
+(('c_nationkey',), ('l_commitdate',), ('l_quantity',), ('l_receiptdate',), ('o_orderdate',), ('p_brand',), ('p_mfgr',), ('r_name',), ('s_nationkey',), ('s_phone',))	7555.700000000186
+(('c_nationkey',), ('l_partkey',), ('l_quantity',), ('n_name',), ('n_regionkey',), ('o_custkey',), ('o_orderstatus',), ('p_mfgr',), ('r_name',), ('s_nationkey',))	2057059.9800000002
+(('l_receiptdate',), ('l_suppkey',), ('n_name',), ('n_regionkey',), ('o_custkey',), ('p_brand',), ('p_mfgr',), ('ps_supplycost',), ('s_acctbal',), ('s_phone',))	123702.19000000041
+(('l_quantity',), ('l_receiptdate',), ('l_shipinstruct',), ('o_orderstatus',), ('p_brand',), ('p_container',), ('p_mfgr',), ('p_type',), ('s_nationkey',), ('s_phone',))	7450.630000000354
+(('c_nationkey',), ('l_receiptdate',), ('l_shipinstruct',), ('o_custkey',), ('o_orderstatus',), ('p_brand',), ('p_container',), ('p_mfgr',), ('s_nationkey',), ('s_phone',))	27397.810000000056
+(('n_name',), ('s_phone',), ('l_suppkey',), ('p_mfgr',), ('o_orderstatus',), ('l_quantity',), ('l_receiptdate',), ('r_name',), ('p_brand',), ('o_custkey',))	116711.88000000035
+(('c_nationkey',), ('l_quantity',), ('l_receiptdate',), ('l_suppkey',), ('o_orderstatus',), ('p_container',), ('p_mfgr',), ('r_name',), ('s_acctbal',), ('s_nationkey',))	95277.89000000013
+(('l_partkey',), ('l_quantity',), ('l_receiptdate',), ('n_name',), ('o_orderstatus',), ('p_container',), ('p_mfgr',), ('r_name',), ('s_nationkey',), ('s_phone',))	2039950.4800000002
+(('l_quantity',), ('l_receiptdate',), ('l_shipinstruct',), ('l_suppkey',), ('o_orderdate',), ('o_orderstatus',), ('p_mfgr',), ('p_type',), ('s_nationkey',), ('s_phone',))	95278.8200000003
+2602680.95

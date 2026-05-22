@@ -1,0 +1,1760 @@
+diff --git a/adasel/ada_select.py b/adasel/ada_select.py
+index c9ee640..b0a2267 100644
+--- a/adasel/ada_select.py
++++ b/adasel/ada_select.py
+@@ -91,6 +91,17 @@ class AdaSelect:
+         self.beta = 1.10
+         self.ratio = 0.5
+         self.timeout = 30_000
++        # Timeout recovery is handled as a recommendation-side replan signal,
++        # not as an immediate rollback to an old workload phase.
++        self.timeout_policy = "replan"
++        self.timeout_reset_after = 2
++        self.timeout_shift_similarity_threshold = 0.35
++        self.timeout_force_full_budget = True
++        self.timeout_retain_penalty = 0.75
++        self.timeout_disable_keep_bonus = True
++        self.timeout_delta_scale = 0.50
++        self.timeout_drop_unsupported_old = True
++        self.timeout_drop_floor = 0.50
+         self.min_width = 1
+         self.max_width = 2
+         self.workload_count = 0  # 用于追踪轮次，处理冷启动
+@@ -120,6 +131,23 @@ class AdaSelect:
+         self.g0_selection_enable_expr = False
+         self.g0_selection_require_same_factor = True
+         self.g0_keep_enabled = True
++
++        # Phase 1.5: configuration update policy.
++        # retain_swap is the new mainline; topk_beta is kept as an ablation baseline.
++        self.choose_policy = "retain_swap"
++        self.retain_swap_delta = 0.05
++        self.retain_swap_admit_floor = 0.00
++        self.retain_swap_keep_bonus = 0.20
++        self.retain_swap_curr_bonus = 0.15
++        self.retain_swap_structural_weight = 0.25
++        self.retain_swap_support_weight = 0.10
++        self.retain_swap_stale_weight = 0.15
++        self.retain_swap_risk_weight = 0.10
++        self.retain_swap_maintenance_weight = 0.05
++        self.retain_swap_create_cost_weight = 1.00
++        self.retain_swap_stale_horizon = 10
++        self.retain_swap_max_blocked_log = 20
++
+         self.g0_merge_enabled = False
+         self.g0_merge_max_width = 3
+         self.g0_merge_enable_group = True
+@@ -245,7 +273,17 @@ class AdaSelect:
+         self._last_net_benefit_map: Dict[IndexKey, float] = {}
+         self._last_obs_delta_map: Dict[IndexKey, float] = {}
+         self._last_obs_src_map: Dict[IndexKey, str] = {}
+-        self._last_decision_stats: Dict[str, float] = {}
++        self._last_decision_stats: Dict[str, Any] = {}
++
++        # Phase 1.5 retain/swap decision diagnostics.
++        self._last_support_count_map: Dict[IndexKey, int] = {}
++        self._last_main_target_set: Set[IndexKey] = set()
++        self._last_corr_target_set: Set[IndexKey] = set()
++        self._last_index_meta_map: Dict[IndexKey, Dict[str, Any]] = {}
++        self._last_retention_score_map: Dict[IndexKey, float] = {}
++        self._last_admission_score_map: Dict[IndexKey, float] = {}
++        self._last_swap_partner_map: Dict[IndexKey, IndexKey] = {}
++        self._last_blocked_swap_map: Dict[IndexKey, Dict[str, Any]] = {}
+ 
+         # Phase 0.5 (WDCG) debugging/metrics
+         self._last_wdcg_score_map: Dict[IndexKey, float] = {}
+@@ -332,7 +370,12 @@ class AdaSelect:
+         #   - regression: system used to be stable but becomes unstable
+         # Values: "normal" | "cold_start" | "regression"
+         self._timeout_state: str = "normal"
+-        self._timeout_state = "normal"
++        self._timeout_recovery_action: str = ""
++        self._timeout_workload_similarity: Optional[float] = None
++        self._timeout_bad_old_conf: Set[IndexKey] = set()
++        self._timeout_force_full_budget_once: bool = False
++        self._last_stable_workload_sig: Set[str] = set()
++        self._prev_workload_sig: Set[str] = set()
+ 
+     def _reset_round_diagnostics(self) -> None:
+         """Reset per-round diagnostic caches used by metrics/trace logging."""
+@@ -348,6 +391,14 @@ class AdaSelect:
+         self._last_obs_delta_map.clear()
+         self._last_obs_src_map.clear()
+         self._last_decision_stats.clear()
++        self._last_support_count_map.clear()
++        self._last_main_target_set.clear()
++        self._last_corr_target_set.clear()
++        self._last_index_meta_map.clear()
++        self._last_retention_score_map.clear()
++        self._last_admission_score_map.clear()
++        self._last_swap_partner_map.clear()
++        self._last_blocked_swap_map.clear()
+         self._last_wdcg_score_map.clear()
+         self._last_wdcg_stats.clear()
+         try:
+@@ -410,6 +461,18 @@ class AdaSelect:
+             self.ratio = float(ratio)
+ 
+             self.timeout = int(cfg.get("timeout", getattr(self, "timeout", 30000)))
++            # Timeout recovery knobs. Default policy is current-workload replan;
++            # rollback is intentionally not the mainline because it can return to
++            # the previous workload phase and cause repeated timeouts.
++            self.timeout_policy = str(cfg.get("timeout_policy", getattr(self, "timeout_policy", "replan"))).lower()
++            self.timeout_reset_after = int(cfg.get("timeout_reset_after", getattr(self, "timeout_reset_after", 2)))
++            self.timeout_shift_similarity_threshold = float(cfg.get("timeout_shift_similarity_threshold", getattr(self, "timeout_shift_similarity_threshold", 0.35)))
++            self.timeout_force_full_budget = bool(cfg.get("timeout_force_full_budget", getattr(self, "timeout_force_full_budget", True)))
++            self.timeout_retain_penalty = float(cfg.get("timeout_retain_penalty", getattr(self, "timeout_retain_penalty", 0.75)))
++            self.timeout_disable_keep_bonus = bool(cfg.get("timeout_disable_keep_bonus", getattr(self, "timeout_disable_keep_bonus", True)))
++            self.timeout_delta_scale = float(cfg.get("timeout_delta_scale", getattr(self, "timeout_delta_scale", 0.50)))
++            self.timeout_drop_unsupported_old = bool(cfg.get("timeout_drop_unsupported_old", getattr(self, "timeout_drop_unsupported_old", True)))
++            self.timeout_drop_floor = float(cfg.get("timeout_drop_floor", getattr(self, "timeout_drop_floor", 0.50)))
+             self.rsfe_decay = float(cfg.get("rsfe_decay", getattr(self, "rsfe_decay", 0.9)))
+ 
+             self.min_width = int(cfg.get("min_width", self.min_width))
+@@ -437,6 +500,25 @@ class AdaSelect:
+             self.g0_selection_enable_expr = bool(cfg.get("g0_selection_enable_expr", getattr(self, "g0_selection_enable_expr", False)))
+             self.g0_selection_require_same_factor = bool(cfg.get("g0_selection_require_same_factor", getattr(self, "g0_selection_require_same_factor", True)))
+             self.g0_keep_enabled = bool(cfg.get("g0_keep_enabled", getattr(self, "g0_keep_enabled", True)))
++
++            # Phase 1.5 configuration decision policy.
++            # Aliases are accepted so experiment configs can read naturally.
++            self.choose_policy = str(
++                cfg.get("choose_policy", cfg.get("decision_policy", getattr(self, "choose_policy", "retain_swap")))
++            ).lower()
++            self.retain_swap_delta = float(cfg.get("retain_swap_delta", getattr(self, "retain_swap_delta", 0.05)))
++            self.retain_swap_admit_floor = float(cfg.get("retain_swap_admit_floor", getattr(self, "retain_swap_admit_floor", 0.0)))
++            self.retain_swap_keep_bonus = float(cfg.get("retain_swap_keep_bonus", getattr(self, "retain_swap_keep_bonus", 0.20)))
++            self.retain_swap_curr_bonus = float(cfg.get("retain_swap_curr_bonus", getattr(self, "retain_swap_curr_bonus", 0.15)))
++            self.retain_swap_structural_weight = float(cfg.get("retain_swap_structural_weight", getattr(self, "retain_swap_structural_weight", 0.25)))
++            self.retain_swap_support_weight = float(cfg.get("retain_swap_support_weight", getattr(self, "retain_swap_support_weight", 0.10)))
++            self.retain_swap_stale_weight = float(cfg.get("retain_swap_stale_weight", getattr(self, "retain_swap_stale_weight", 0.15)))
++            self.retain_swap_risk_weight = float(cfg.get("retain_swap_risk_weight", getattr(self, "retain_swap_risk_weight", 0.10)))
++            self.retain_swap_maintenance_weight = float(cfg.get("retain_swap_maintenance_weight", getattr(self, "retain_swap_maintenance_weight", 0.05)))
++            self.retain_swap_create_cost_weight = float(cfg.get("retain_swap_create_cost_weight", getattr(self, "retain_swap_create_cost_weight", 1.00)))
++            self.retain_swap_stale_horizon = int(cfg.get("retain_swap_stale_horizon", getattr(self, "retain_swap_stale_horizon", 10)))
++            self.retain_swap_max_blocked_log = int(cfg.get("retain_swap_max_blocked_log", getattr(self, "retain_swap_max_blocked_log", 20)))
++
+             # G0-3 structured merge (disabled on Phase 1 mainline)
+             self.g0_merge_enabled = bool(cfg.get("g0_merge_enabled", getattr(self, "g0_merge_enabled", True)))
+             self.g0_merge_max_width = int(cfg.get("g0_merge_max_width", getattr(self, "g0_merge_max_width", 3)))
+@@ -1244,6 +1326,46 @@ class AdaSelect:
+ 
+         curr_union: Set[IndexKey] = set().union(*query_indexes) if query_indexes else set()
+ 
++        # Best-effort per-index metadata used by traces and retain/swap diagnostics.
++        # Current-candidate family comes from the structured enumerator; keep/old metadata
++        # comes from installed_index_state. This keeps trace family/source lanes populated
++        # without changing the generator contract.
++        meta_map: Dict[IndexKey, Dict[str, Any]] = {}
++        try:
++            _gen = getattr(self, "_wdcg_gen", None)
++            enum_meta = getattr(getattr(_gen, "selection_enum", None), "last_meta", {}) if _gen is not None else {}
++            if isinstance(enum_meta, dict):
++                for k, m in enum_meta.items():
++                    if isinstance(m, dict):
++                        meta_map[_canon(k)] = dict(m)
++        except Exception:
++            meta_map = {}
++
++        installed_state = getattr(self, "installed_index_state", {}) or {}
++        for k in curr_union:
++            mm = meta_map.setdefault(k, {})
++            mm.setdefault("source_lane", "curr_union")
++            mm["in_curr_union"] = 1
++        for k in appearing_curr:
++            mm = meta_map.setdefault(k, {})
++            mm["source_lane"] = "appearing_curr"
++            mm["selected_curr"] = 1
++        for k in keep_visible:
++            st = installed_state.get(k) if isinstance(installed_state, dict) else None
++            mm = meta_map.setdefault(k, {})
++            mm["source_lane"] = "keep_visible"
++            mm["selected_keep"] = 1
++            mm.setdefault("family", getattr(st, "family", "BASE_KEEP") or "BASE_KEEP")
++            mm.setdefault("base_family", getattr(st, "family", "BASE_KEEP") or "BASE_KEEP")
++        for k in set(old_conf):
++            st = installed_state.get(k) if isinstance(installed_state, dict) else None
++            mm = meta_map.setdefault(k, {})
++            mm.setdefault("source_lane", "old_conf")
++            mm["in_old_conf"] = 1
++            mm.setdefault("family", getattr(st, "family", "BASE") or "BASE")
++            mm.setdefault("base_family", getattr(st, "family", "BASE") or "BASE")
++        self._last_index_meta_map = meta_map
++
+         wdcg_on = bool(getattr(self, "wdcg_enabled", False))
+         old_relevant: Set[IndexKey] = set(old_conf).intersection(curr_union) if wdcg_on else set()
+         old_corr_set: Set[IndexKey] = old_relevant.difference(appearing_curr) if wdcg_on else set()
+@@ -1269,7 +1391,8 @@ class AdaSelect:
+         # -------------------------------------------------------------
+         # Budget should scale with the pre-topk current structured universe (curr_union),
+         # then be capped by the number of visible current candidates (appearing_curr).
+-        if self.workload_count == 0:
++        timeout_full_budget = bool(getattr(self, "_timeout_force_full_budget_once", False))
++        if self.workload_count == 0 or timeout_full_budget:
+             budget = len(appearing_curr)
+         else:
+             budget = (
+@@ -1283,6 +1406,7 @@ class AdaSelect:
+         try:
+             if isinstance(getattr(self, "_last_wdcg_stats", None), dict):
+                 self._last_wdcg_stats["budget_curr"] = int(budget)
++                self._last_wdcg_stats["timeout_full_budget"] = int(1 if timeout_full_budget else 0)
+         except Exception:
+             pass
+ 
+@@ -1299,6 +1423,7 @@ class AdaSelect:
+         for qset in query_indexes:
+             for idx in qset:
+                 support_count[idx] += 1
++        self._last_support_count_map = {k: int(v) for k, v in support_count.items()}
+ 
+         def _main_rank_key(idx_key: IndexKey) -> Tuple[float, int, float, int, int]:
+             """Ranking for main budgeted exploration over appearing_curr.
+@@ -1342,6 +1467,8 @@ class AdaSelect:
+             reverse=True,
+         )
+         self._last_eval_order = list(main_targets)
++        self._last_main_target_set = set(main_targets)
++        self._last_corr_target_set = set(corr_targets)
+ 
+         try:
+             if isinstance(getattr(self, "_last_wdcg_stats", None), dict):
+@@ -1429,8 +1556,453 @@ class AdaSelect:
+                 self.idx_abs_error_smooth[key] *= self.rsfe_decay
+ 
+     def _choose_config(self, old_conf: Set[IndexKey]) -> List[IndexKey]:
++        """Dispatch to the configured configuration-update policy."""
++        policy = str(getattr(self, "choose_policy", "retain_swap") or "retain_swap").lower()
++        if policy in {"topk_beta", "topk-beta", "topk", "beta", "legacy", "lite"}:
++            return self._choose_config_topk_beta(old_conf)
++        if policy not in {"retain_swap", "retainswap", "swap", "local"}:
++            logger.warning("Unknown choose_policy=%s; falling back to retain_swap", policy)
++        return self._choose_config_retain_swap(old_conf)
++
++    @staticmethod
++    def _safe_ratio(new_value: float, old_value: float) -> float:
++        eps = 1e-9
++        if old_value > eps and new_value > eps:
++            return new_value / old_value
++        if old_value < -eps and new_value < -eps:
++            return abs(old_value) / abs(new_value) if abs(new_value) > eps else float("-inf")
++        if old_value < -eps and new_value > eps:
++            return float("inf")
++        if abs(old_value) <= eps and new_value > eps:
++            return float("inf")
++        return float("-inf")
++
++    def _retainswap_stale_score(self, key: IndexKey) -> float:
++        """Normalize incumbent age into [0, 1] for retain/swap scoring."""
++        state = getattr(self, "installed_index_state", {}) or {}
++        st = state.get(key) if isinstance(state, dict) else None
++        if st is None:
++            return 1.0
++        try:
++            last = int(getattr(st, "last_selected_round", -1))
++            if last < 0:
++                return 1.0
++            horizon = max(1, int(getattr(self, "retain_swap_stale_horizon", 10)))
++            age = max(0, int(getattr(self, "workload_count", 0)) - last)
++            return max(0.0, min(1.0, float(age) / float(horizon)))
++        except Exception:
++            return 1.0
++
++    def _normalize_positive_map(self, values: Dict[IndexKey, float], keys: Set[IndexKey]) -> Dict[IndexKey, float]:
++        """Max-normalize non-negative diagnostics such as risk/support into [0, 1]."""
++        if not keys:
++            return {}
++        max_v = 0.0
++        out: Dict[IndexKey, float] = {}
++        for k in keys:
++            try:
++                v = max(0.0, float(values.get(k, 0.0) or 0.0))
++            except Exception:
++                v = 0.0
++            out[k] = v
++            max_v = max(max_v, v)
++        if max_v <= 1e-9:
++            return {k: 0.0 for k in keys}
++        return {k: min(1.0, v / max_v) for k, v in out.items()}
++
++    def _choose_config_retain_swap(self, old_conf: Set[IndexKey]) -> List[IndexKey]:
++        """
++        Phase 1.5 local configuration update.
++
++        Visible action space:
++            visible_action_set = appearing_curr ∪ old_conf
++
++        `keep_visible` is not allowed to expand the action space. It only supplies
++        a retention bonus to old incumbents that were surfaced through U_keep.
++        The method starts from old_conf and admits newcomers by filling open slots
++        or by swapping them against the weakest retained incumbent when:
++
++            A(newcomer) - R(incumbent) > retain_swap_delta
++        """
++        old_canon: Set[IndexKey] = {_canon(k) for k in old_conf}
++        appearing_curr: Set[IndexKey] = set(getattr(self, "_last_appearing_curr_set", set()) or set())
++        keep_visible: Set[IndexKey] = set(getattr(self, "_last_keep_visible_set", set()) or set())
++
++        if keep_visible and not keep_visible.issubset(old_canon):
++            raise RuntimeError(
++                f"keep_visible must be a subset of old_conf; stray={sorted(keep_visible - old_canon)}"
++            )
++        if appearing_curr.intersection(keep_visible):
++            raise RuntimeError(
++                f"appearing_curr and keep_visible must be disjoint; overlap={sorted(appearing_curr & keep_visible)}"
++            )
++
++        max_k = max(0, int(getattr(self, "max_num", 10)))
++        visible_keys: Set[IndexKey] = set(appearing_curr).union(old_canon)
++        self._last_visible_action_set = set(visible_keys)
++
++        # Empty visible space: clear diagnostics and return no recommendation.
++        if not visible_keys or max_k <= 0:
++            final_conf: Set[IndexKey] = set()
++            self._last_candidate_conf = set(final_conf)
++            self._last_final_conf = set(final_conf)
++            self._last_net_benefit_map = {}
++            self._last_retention_score_map = {}
++            self._last_admission_score_map = {}
++            self._last_swap_partner_map = {}
++            self._last_blocked_swap_map = {}
++            self._last_decision_stats = {
++                "policy": "retain_swap",
++                "old_benefit": 0.0,
++                "new_benefit": 0.0,
++                "ratio": float("-inf"),
++                "beta": float(getattr(self, "beta", 0.0)),
++                "delta_swap": float(getattr(self, "retain_swap_delta", 0.05)),
++                "timeout_state": str(getattr(self, "_timeout_state", "normal")),
++                "timeout_recovery_action": str(getattr(self, "_timeout_recovery_action", "")),
++                "timeout_workload_similarity": getattr(self, "_timeout_workload_similarity", None),
++                "timeout_bad_old_count": int(len(getattr(self, "_timeout_bad_old_conf", set()) or set())),
++                "timeout_drop_count": 0,
++                "visible_curr": float(len(appearing_curr)),
++                "visible_keep": float(len(keep_visible)),
++                "visible_old_conf": float(len(old_canon)),
++                "visible_total": float(len(visible_keys)),
++                "retained_old_count": 0,
++                "admitted_new_count": 0,
++                "dropped_old_count": len(old_canon),
++                "swap_count": 0,
++                "blocked_swap_count": 0,
++            }
++            return []
++
++        raw_benefit = {k: float(self.columns_benefit.get(k, 0.0)) for k in visible_keys}
++        benefit_norm = self._minmax_norm(raw_benefit)
++
++        raw_struct = {k: float((getattr(self, "_last_wdcg_score_map", {}) or {}).get(k, 0.0)) for k in visible_keys}
++        structural_norm = self._minmax_norm(raw_struct)
++
++        support_raw = {k: float((getattr(self, "_last_support_count_map", {}) or {}).get(k, 0.0)) for k in visible_keys}
++        support_norm = self._normalize_positive_map(support_raw, visible_keys)
++
++        risk_raw = {k: abs(float((getattr(self, "idx_abs_error_smooth", {}) or {}).get(k, 0.0) or 0.0)) for k in visible_keys}
++        risk_norm = self._normalize_positive_map(risk_raw, visible_keys)
++
++        timeout_state = str(getattr(self, "_timeout_state", "normal") or "normal")
++        timeout_active = timeout_state != "normal"
++        timeout_bad_old: Set[IndexKey] = set(getattr(self, "_timeout_bad_old_conf", set()) or set())
++        timeout_retain_penalty_w = float(getattr(self, "timeout_retain_penalty", 0.75)) if timeout_active else 0.0
++        timeout_disable_keep_bonus = bool(getattr(self, "timeout_disable_keep_bonus", True)) and timeout_active
++        timeout_delta_scale = float(getattr(self, "timeout_delta_scale", 0.50)) if timeout_active else 1.0
++        timeout_delta_scale = max(0.0, min(1.0, timeout_delta_scale))
++        timeout_drop_unsupported_old = bool(getattr(self, "timeout_drop_unsupported_old", True)) and timeout_active
++        timeout_drop_floor = float(getattr(self, "timeout_drop_floor", 0.50))
++
++        delta_swap = float(getattr(self, "retain_swap_delta", 0.05)) * timeout_delta_scale
++        admit_floor = float(getattr(self, "retain_swap_admit_floor", 0.0))
++        keep_bonus_w = float(getattr(self, "retain_swap_keep_bonus", 0.20))
++        curr_bonus_w = float(getattr(self, "retain_swap_curr_bonus", 0.15))
++        structural_w = float(getattr(self, "retain_swap_structural_weight", 0.25))
++        support_w = float(getattr(self, "retain_swap_support_weight", 0.10))
++        stale_w = float(getattr(self, "retain_swap_stale_weight", 0.15))
++        risk_w = float(getattr(self, "retain_swap_risk_weight", 0.10))
++        maintenance_w = float(getattr(self, "retain_swap_maintenance_weight", 0.05))
++        create_w = float(getattr(self, "retain_swap_create_cost_weight", 1.00))
++        max_blocked_log = max(0, int(getattr(self, "retain_swap_max_blocked_log", 20)))
++
++        retention_scores: Dict[IndexKey, float] = {}
++        admission_scores: Dict[IndexKey, float] = {}
++
++        for key in old_canon:
++            current_support_bonus = 0.0
++            if key in appearing_curr:
++                current_support_bonus = (
++                    curr_bonus_w
++                    + structural_w * float(structural_norm.get(key, 0.0))
++                    + support_w * float(support_norm.get(key, 0.0))
++                )
++            keep_bonus = keep_bonus_w if key in keep_visible else 0.0
++            if timeout_disable_keep_bonus and key in timeout_bad_old:
++                keep_bonus = 0.0
++            stale_penalty = stale_w * self._retainswap_stale_score(key)
++            risk_penalty = risk_w * float(risk_norm.get(key, 0.0))
++            maintenance_penalty = maintenance_w * float(self._creation_cost(key))
++            timeout_penalty = timeout_retain_penalty_w if key in timeout_bad_old else 0.0
++            retention_scores[key] = (
++                float(benefit_norm.get(key, 0.0))
++                + keep_bonus
++                + current_support_bonus
++                - stale_penalty
++                - risk_penalty
++                - maintenance_penalty
++                - timeout_penalty
++            )
++
++        newcomers: Set[IndexKey] = set(appearing_curr).difference(old_canon)
++        for key in newcomers:
++            create_penalty = create_w * float(self._creation_cost(key))
++            risk_penalty = risk_w * float(risk_norm.get(key, 0.0))
++            admission_scores[key] = (
++                float(benefit_norm.get(key, 0.0))
++                + curr_bonus_w
++                + structural_w * float(structural_norm.get(key, 0.0))
++                + support_w * float(support_norm.get(key, 0.0))
++                - create_penalty
++                - risk_penalty
++            )
++
++        # Expose per-index local scores to traces. Old keys carry R, newcomers carry A.
++        action_scores: Dict[IndexKey, float] = {}
++        action_scores.update(retention_scores)
++        action_scores.update(admission_scores)
++        self._last_retention_score_map = dict(retention_scores)
++        self._last_admission_score_map = dict(admission_scores)
++        self._last_net_benefit_map = dict(action_scores)
++        self._last_swap_partner_map = {}
++        self._last_blocked_swap_map = {}
++
++        candidate_conf: Set[IndexKey] = set(old_canon)
++        swap_decisions: List[Dict[str, Any]] = []
++        blocked_swaps: List[Dict[str, Any]] = []
++        capacity_drops: List[Dict[str, Any]] = []
++        timeout_drops: List[Dict[str, Any]] = []
++
++        def _stable_key(idx: IndexKey) -> Tuple[str, Tuple[str, ...]]:
++            return (idx[0], tuple(idx[1]))
++
++        # If the physical state already exceeds max_num, drop the weakest incumbents
++        # first. This is a capacity repair, not a newcomer-driven swap.
++        if len(candidate_conf) > max_k:
++            over = len(candidate_conf) - max_k
++            weakest_old = sorted(
++                candidate_conf,
++                key=lambda k: (retention_scores.get(k, float("-inf")), _stable_key(k)),
++            )[:over]
++            for old_key in weakest_old:
++                candidate_conf.remove(old_key)
++                capacity_drops.append(
++                    {
++                        "old": old_key,
++                        "old_score": float(retention_scores.get(old_key, 0.0)),
++                        "reason": "capacity_repair",
++                    }
++                )
++
++        # On timeout recovery, an old incumbent that has no current structural
++        # support and just caused an execution timeout should not be protected
++        # merely because it had high benefit in a previous workload phase. Drop
++        # such weak unsupported incumbents before admitting newcomers so the
++        # next configuration can actually move away from the failing phase.
++        if timeout_drop_unsupported_old:
++            timeout_drop_candidates = sorted(
++                [k for k in candidate_conf if k in timeout_bad_old and k not in appearing_curr],
++                key=lambda k: (retention_scores.get(k, float("-inf")), _stable_key(k)),
++            )
++            for old_key in timeout_drop_candidates:
++                score = float(retention_scores.get(old_key, 0.0))
++                if score > timeout_drop_floor:
++                    continue
++                candidate_conf.remove(old_key)
++                timeout_drops.append(
++                    {
++                        "old": old_key,
++                        "old_score": score,
++                        "drop_floor": float(timeout_drop_floor),
++                        "reason": "timeout_unsupported_old",
++                    }
++                )
++
++        newcomer_order = sorted(
++            newcomers,
++            key=lambda k: (-float(admission_scores.get(k, float("-inf"))), _stable_key(k)),
++        )
++
++        # First fill open slots. For cold start, keep the prior behavior of seeding the
++        # configuration from the best visible current candidates even if their local
++        # admission score is exactly zero after create-cost normalization.
++        for new_key in newcomer_order:
++            if len(candidate_conf) >= max_k:
++                break
++            if new_key in candidate_conf:
++                continue
++            score = float(admission_scores.get(new_key, float("-inf")))
++            if (not old_canon) or score > admit_floor:
++                candidate_conf.add(new_key)
++            elif len(blocked_swaps) < max_blocked_log:
++                blocked_swaps.append(
++                    {
++                        "new": new_key,
++                        "new_score": score,
++                        "reason": "open_slot_below_admit_floor",
++                    }
++                )
++                self._last_blocked_swap_map[new_key] = dict(blocked_swaps[-1])
++
++        # Then perform local newcomer-vs-incumbent swaps.
++        for new_key in newcomer_order:
++            if new_key in candidate_conf:
++                continue
++            old_candidates = [k for k in candidate_conf if k in old_canon]
++            if not old_candidates:
++                if len(blocked_swaps) < max_blocked_log:
++                    blocked_swaps.append(
++                        {
++                            "new": new_key,
++                            "new_score": float(admission_scores.get(new_key, 0.0)),
++                            "reason": "no_old_incumbent_to_swap",
++                        }
++                    )
++                    self._last_blocked_swap_map[new_key] = dict(blocked_swaps[-1])
++                break
++
++            old_key = min(
++                old_candidates,
++                key=lambda k: (retention_scores.get(k, float("-inf")), _stable_key(k)),
++            )
++            gain = float(admission_scores.get(new_key, float("-inf"))) - float(retention_scores.get(old_key, 0.0))
++            if gain > delta_swap:
++                candidate_conf.remove(old_key)
++                candidate_conf.add(new_key)
++                decision = {
++                    "old": old_key,
++                    "new": new_key,
++                    "old_score": float(retention_scores.get(old_key, 0.0)),
++                    "new_score": float(admission_scores.get(new_key, 0.0)),
++                    "gain": float(gain),
++                    "delta_swap": float(delta_swap),
++                }
++                swap_decisions.append(decision)
++                self._last_swap_partner_map[old_key] = new_key
++                self._last_swap_partner_map[new_key] = old_key
++            else:
++                if len(blocked_swaps) < max_blocked_log:
++                    block = {
++                        "old": old_key,
++                        "new": new_key,
++                        "old_score": float(retention_scores.get(old_key, 0.0)),
++                        "new_score": float(admission_scores.get(new_key, 0.0)),
++                        "gain": float(gain),
++                        "delta_swap": float(delta_swap),
++                        "reason": "below_delta_swap",
++                    }
++                    blocked_swaps.append(block)
++                    self._last_blocked_swap_map[new_key] = dict(block)
++                # Newcomers are sorted by A descending and this is the weakest old;
++                # if this one cannot pass, lower-scored newcomers cannot pass either.
++                break
++
++        final_conf: Set[IndexKey] = set(candidate_conf)
++        self._last_candidate_conf = set(final_conf)
++        self._last_final_conf = set(final_conf)
++
++        retained_old = final_conf.intersection(old_canon)
++        admitted_new = final_conf.difference(old_canon)
++        dropped_old = old_canon.difference(final_conf)
++        add_set = set(admitted_new)
++        drop_set = set(dropped_old)
++
++        self._m_stats["reconf_add"] += len(add_set)
++        self._m_stats["reconf_drop"] += len(drop_set)
++
++        trans_create_cost = sum(self._creation_cost(k) for k in add_set)
++        self._m_stats["trans_create"] += trans_create_cost
++
++        old_benefit = sum(float(retention_scores.get(k, 0.0)) for k in old_canon)
++        new_benefit = 0.0
++        for k in final_conf:
++            if k in old_canon:
++                new_benefit += float(retention_scores.get(k, 0.0))
++            else:
++                new_benefit += float(admission_scores.get(k, 0.0))
++        ratio = self._safe_ratio(new_benefit, old_benefit)
++
++        try:
++            old_support = sum(int((getattr(self, "idx_seen_cnt", {}) or {}).get(k, 0)) for k in old_canon)
++        except Exception:
++            old_support = 0
++        try:
++            self._last_deadzone_stats["deadzone_old_support"] = int(old_support)
++            self._last_deadzone_stats["deadzone_blocked"] = 0
++        except Exception:
++            pass
++
++        logger.info(
++            "RetainSwap | retained=%d admitted=%d dropped=%d swaps=%d blocked=%d | "
++            "visible_curr=%d keep_visible=%d old_conf=%d visible_total=%d",
++            len(retained_old),
++            len(admitted_new),
++            len(dropped_old),
++            len(swap_decisions),
++            len(blocked_swaps),
++            len(appearing_curr),
++            len(keep_visible),
++            len(old_canon),
++            len(visible_keys),
++        )
++        logger.info(
++            "Round %d Decision | Add: %d, Drop: %d, Cost: %.2f | Total What-If: %d",
++            self.workload_count,
++            len(add_set),
++            len(drop_set),
++            trans_create_cost,
++            self._m_stats["what_if_calls"],
++        )
++
++        # Mirror key counts into WDCG stats so main.py/CSV can pick them up if desired.
++        try:
++            if not isinstance(getattr(self, "_last_wdcg_stats", None), dict):
++                self._last_wdcg_stats = {}
++            self._last_wdcg_stats["retain_old_count"] = int(len(retained_old))
++            self._last_wdcg_stats["admit_new_count"] = int(len(admitted_new))
++            self._last_wdcg_stats["drop_old_count"] = int(len(dropped_old))
++            self._last_wdcg_stats["swap_count"] = int(len(swap_decisions))
++            self._last_wdcg_stats["blocked_swap_count"] = int(len(blocked_swaps))
++            self._last_wdcg_stats["visible_action_count"] = int(len(visible_keys))
++        except Exception:
++            pass
++
++        self._last_decision_stats = {
++            "policy": "retain_swap",
++            "old_benefit": float(old_benefit),
++            "new_benefit": float(new_benefit),
++            "ratio": float(ratio),
++            "beta": float(getattr(self, "beta", 0.0)),
++            "delta_swap": float(delta_swap),
++            "base_delta_swap": float(getattr(self, "retain_swap_delta", 0.05)),
++            "admit_floor": float(admit_floor),
++            "timeout_state": timeout_state,
++            "timeout_recovery_action": str(getattr(self, "_timeout_recovery_action", "")),
++            "timeout_workload_similarity": getattr(self, "_timeout_workload_similarity", None),
++            "timeout_bad_old_count": int(len(timeout_bad_old)),
++            "timeout_retain_penalty": float(timeout_retain_penalty_w),
++            "timeout_drop_floor": float(timeout_drop_floor),
++            "timeout_drop_count": int(len(timeout_drops)),
++            "visible_curr": float(len(appearing_curr)),
++            "visible_keep": float(len(keep_visible)),
++            "visible_old_conf": float(len(old_canon)),
++            "visible_total": float(len(visible_keys)),
++            "candidate_conf_count": int(len(final_conf)),
++            "retained_old_count": int(len(retained_old)),
++            "admitted_new_count": int(len(admitted_new)),
++            "dropped_old_count": int(len(dropped_old)),
++            "swap_count": int(len(swap_decisions)),
++            "blocked_swap_count": int(len(blocked_swaps)),
++            "capacity_drop_count": int(len(capacity_drops)),
++            "candidate_conf": sorted(final_conf),
++            "retained_old": sorted(retained_old),
++            "admitted_new": sorted(admitted_new),
++            "dropped_old": sorted(dropped_old),
++            "swap_decisions": swap_decisions,
++            "blocked_swaps": blocked_swaps,
++            "capacity_drops": capacity_drops,
++            "timeout_drops": timeout_drops,
++            "visible_action_set": sorted(visible_keys),
++        }
++
++        return sorted(final_conf)
++
++    def _choose_config_topk_beta(self, old_conf: Set[IndexKey]) -> List[IndexKey]:
+         """
+-        Choose the next physical configuration from a clean visible action space.
++        Legacy Phase-1 decision rule: modular top-K over visible action space + whole-set beta gate.
+ 
+         Split-visibility semantics:
+           - appearing_curr: current structured candidates admitted into the visible pool
+@@ -1459,6 +2031,10 @@ class AdaSelect:
+ 
+         visible_keys: Set[IndexKey] = set(appearing_curr).union(old_canon)
+         self._last_visible_action_set = set(visible_keys)
++        self._last_retention_score_map = {}
++        self._last_admission_score_map = {}
++        self._last_swap_partner_map = {}
++        self._last_blocked_swap_map = {}
+ 
+         old_benefit = 0.0
+         new_benefit = 0.0
+@@ -1556,7 +2132,20 @@ class AdaSelect:
+         )
+ 
+         self._last_final_conf = set(final_conf)
++        try:
++            if not isinstance(getattr(self, "_last_wdcg_stats", None), dict):
++                self._last_wdcg_stats = {}
++            self._last_wdcg_stats["retain_old_count"] = int(len(final_conf & old_canon))
++            self._last_wdcg_stats["admit_new_count"] = int(len(final_conf - old_canon))
++            self._last_wdcg_stats["drop_old_count"] = int(len(old_canon - final_conf))
++            self._last_wdcg_stats["swap_count"] = 0
++            self._last_wdcg_stats["blocked_swap_count"] = 0
++            self._last_wdcg_stats["visible_action_count"] = int(len(visible_keys))
++        except Exception:
++            pass
++
+         self._last_decision_stats = {
++            "policy": "topk_beta",
+             "old_benefit": float(old_benefit),
+             "new_benefit": float(new_benefit),
+             "ratio": float(ratio),
+@@ -1565,9 +2154,17 @@ class AdaSelect:
+             "visible_keep": float(len(keep_visible)),
+             "visible_old_conf": float(len(old_canon)),
+             "visible_total": float(len(visible_keys)),
++            "candidate_conf_count": int(len(final_conf)),
++            "retained_old_count": int(len(final_conf & old_canon)),
++            "admitted_new_count": int(len(final_conf - old_canon)),
++            "dropped_old_count": int(len(old_canon - final_conf)),
++            "swap_count": 0,
++            "blocked_swap_count": 0,
++            "visible_action_set": sorted(visible_keys),
+         }
+ 
+         return sorted(final_conf)
++
+     def _refresh_installed_index_state(self, new_conf: Set[IndexKey]) -> None:
+         round_id = int(getattr(self, "workload_count", 0))
+         old_state = dict(getattr(self, "installed_index_state", {}))
+@@ -1599,110 +2196,150 @@ class AdaSelect:
+         self.installed_index_state = next_state
+ 
+ 
++    @staticmethod
++    def _normalize_sql_for_timeout_signature(sql: str) -> str:
++        """Return a cheap template-like SQL shape used only for timeout diagnostics.
++
++        This deliberately avoids a full SQL parser: constants are erased and
++        whitespace is collapsed so repeated instances of the same template map
++        to the same signature, while different workload phases usually diverge.
++        """
++        try:
++            text = str(sql or "").lower()
++            text = re.sub(r"'([^']|'')*'", "?", text)
++            text = re.sub(r'"([^"\\]|\\.)*"', "?", text)
++            text = re.sub(r"\b\d+(?:\.\d+)?\b", "?", text)
++            text = re.sub(r"\s+", " ", text).strip()
++            return text[:512]
++        except Exception:
++            return str(sql or "")[:512]
++
++    def _workload_timeout_signature(self, workload: Optional[List[str]]) -> Set[str]:
++        if not workload:
++            return set()
++        sig: Set[str] = set()
++        for q in workload:
++            norm = self._normalize_sql_for_timeout_signature(q)
++            if norm:
++                sig.add(norm)
++        return sig
++
++    @staticmethod
++    def _signature_jaccard(a: Set[str], b: Set[str]) -> Optional[float]:
++        if not a or not b:
++            return None
++        return float(len(a & b)) / float(max(1, len(a | b)))
++
++    def _clear_timeout_recovery_flags(self) -> None:
++        self._timeout_state = "normal"
++        self._timeout_recovery_action = ""
++        self._timeout_workload_similarity = None
++        self._timeout_bad_old_conf = set()
++        self._timeout_force_full_budget_once = False
++
++    def _soft_timeout_memory_reset(self, reason: str) -> None:
++        """Clear stale benefit/uncertainty memories without touching physical DB state.
++
++        The driver owns physical reconfiguration and should account for transition
++        cost. Timeout recovery therefore must not call db_con2.drop_all_indexes()
++        or mutate the caller's old_conf set behind the driver's back.
++        """
++        logger.critical("Timeout recovery: soft memory reset (%s); physical diff is left to main.py", reason)
++        for attr in (
++            "columns_benefit",
++            "idx_error_smooth",
++            "idx_abs_error_smooth",
++            "idx_alphas",
++            "idx_alphas_shadow",
++            "idx_seen_cnt",
++        ):
++            try:
++                getattr(self, attr).clear()
++            except Exception:
++                pass
++
+     def _handle_timeout_policy(
+             self,
+             runtimes: List[int],
+             old_conf: Set[IndexKey],
+             workload: Optional[List[str]] = None,
+     ) -> Optional[Set[IndexKey]]:
+-        """Handle timeout signals from the execution stage.
+-
+-        Semantics in this repo: at round k we *execute* workload W_k under the
+-        current physical configuration S_k (old_conf), then we *recommend*
+-        a configuration S_{k+1} to be applied for the next round.
+-
+-        Therefore, when a timeout happens under an empty/weak S_k, returning the
+-        same config (or skipping tuning) will typically cause repeated timeouts.
+-        The safest recovery is to reset and still run the normal
+-        profile-&-select pipeline on the *current* workload to produce S_{k+1}.
++        """Handle execution-stage timeout signals.
++
++        Round semantics in this repo are:
++            execute W_k under S_k (= old_conf), then recommend S_{k+1}.
++
++        A timeout under S_k is therefore evidence that the incumbent is unsafe or
++        stale for the *current* workload. Returning last_stable_config can move
++        the system back to the previous workload phase, which is exactly the
++        repeated-timeout failure mode seen at phase boundaries.
++
++        Mainline recovery is consequently:
++          1. never force rollback on first timeout;
++          2. mark old_conf as timeout-suspect for one retain/swap decision;
++          3. force a full current-candidate evaluation budget for this workload;
++          4. optionally soft-reset stale memories after repeated timeouts;
++          5. let the normal estimate -> choose pipeline produce S_{k+1}.
+         """
+-        is_timeout = any(rt >= self.timeout for rt in runtimes)
++        is_timeout = any(float(rt) >= float(self.timeout) for rt in (runtimes or []))
++        curr_sig = self._workload_timeout_signature(workload)
+ 
+-        # --- Case A: normal run (no timeout) ---
++        # Normal execution: this old_conf has been observed stable for W_k.
+         if not is_timeout:
+             self.consecutive_timeouts = 0
+-            try:
+-                self._timeout_state = "normal"
+-            except Exception:
+-                pass
++            self._clear_timeout_recovery_flags()
+             self.last_stable_config = set(old_conf)
++            self._last_stable_workload_sig = set(curr_sig)
++            self._prev_workload_sig = set(curr_sig)
+             return None
+ 
+-        # --- Case B: timeout detected ---
+         self.consecutive_timeouts += 1
+ 
++        stable_sig = set(getattr(self, "_last_stable_workload_sig", set()) or set())
++        sim = self._signature_jaccard(curr_sig, stable_sig)
++        self._timeout_workload_similarity = sim
++
+         has_stable = bool(getattr(self, "last_stable_config", None))
+-        is_cold_start = (not old_conf) or (not has_stable) or (int(getattr(self, "workload_count", 0)) == 0)
++        has_old = bool(old_conf)
++        is_cold_start = (not has_old) or (not has_stable) or (int(getattr(self, "workload_count", 0)) == 0)
++        shift_threshold = float(getattr(self, "timeout_shift_similarity_threshold", 0.35))
++        looks_like_shift = (sim is None and bool(stable_sig) and bool(curr_sig)) or (sim is not None and sim < shift_threshold)
+ 
+-        timeout_type = "cold_start" if is_cold_start else "regression"
+-        try:
+-            self._timeout_state = timeout_type
+-        except Exception:
+-            pass
++        if is_cold_start:
++            timeout_type = "timeout_cold_start"
++        elif looks_like_shift:
++            timeout_type = "timeout_phase_shift"
++        else:
++            timeout_type = "timeout_regression"
++
++        # This is the key policy change: timeout never returns last_stable_config
++        # on the mainline. It only annotates this round so the normal chooser can
++        # produce a current-workload recommendation.
++        self._timeout_state = timeout_type
++        self._timeout_recovery_action = "replan_current_workload"
++        self._timeout_bad_old_conf = set(old_conf)
++        self._timeout_force_full_budget_once = bool(getattr(self, "timeout_force_full_budget", True))
++
++        reset_after = max(1, int(getattr(self, "timeout_reset_after", 2)))
++        if self.consecutive_timeouts >= reset_after:
++            self._soft_timeout_memory_reset(f"{timeout_type}:consecutive={self.consecutive_timeouts}")
++            # Keep the timeout-suspect old_conf marker after memory reset so
++            # retain/swap still knows which incumbents just failed execution.
++            self._timeout_bad_old_conf = set(old_conf)
++            self._timeout_recovery_action = "soft_reset_and_replan_current_workload"
+ 
+         logger.warning(
+-            "Timeout detected! type=%s consecutive=%d",
++            "Timeout detected! type=%s consecutive=%d similarity=%s action=%s old_conf=%d",
+             timeout_type,
+             self.consecutive_timeouts,
++            "NA" if sim is None else f"{sim:.3f}",
++            self._timeout_recovery_action,
++            len(old_conf or set()),
+         )
+ 
+-        def _hard_reset(reason: str) -> None:
+-            """Reset tuner+DB state, then allow the main pipeline to run."""
+-            logger.critical("Timeout recovery: hard reset (%s).", reason)
+-            try:
+-                # Bring DB back to a clean state.
+-                self.db_con2.drop_all_indexes()
+-            except Exception as e:
+-                logger.error("Failed to drop all indexes during hard reset: %s", e)
+-
+-            # Clear physical snapshot (so the downstream pipeline sees empty S_k).
+-            try:
+-                old_conf.clear()
+-            except Exception:
+-                pass
+-
+-            # Clear benefit memories / uncertainty trackers.
+-            try:
+-                self.columns_benefit.clear()
+-            except Exception:
+-                pass
+-            for attr in ("idx_error_smooth", "idx_abs_error_smooth", "idx_alphas"):
+-                try:
+-                    getattr(self, attr).clear()
+-                except Exception:
+-                    pass
+-
+-            # Reset counters so _estimate_benefits enters the "first-round" path.
+-            self.workload_count = 0
+-            self.consecutive_timeouts = 0
+-            try:
+-                self.last_stable_config.clear()
+-            except Exception:
+-                self.last_stable_config = set()
+-
+-            # Hint to Phase 0.5 candidate generator: prefer plan-first, but must
+-            # be able to fall back to SQL parsing if EXPLAIN fails.
+-            try:
+-                self._force_hybrid_extract_once = True
+-            except Exception:
+-                pass
+-
+-        # --- Class 1: cold-start timeout ---
+-        # Empty/unknown config timed out -> reset and STILL tune on current workload.
+-        if is_cold_start:
+-            _hard_reset("cold_start")
+-            return None
+-
+-        # --- Class 2: regression timeout ---
+-        # A previously stable config started timing out.
+-        # Step 1: rollback once to the last stable config for the next round.
+-        if self.consecutive_timeouts == 1 and has_stable:
+-            logger.warning("Timeout regression: rolling back to last stable config for next round.")
+-            return set(self.last_stable_config)
+-
+-        # Step 2: repeated regression timeouts -> hard reset and re-tune.
+-        _hard_reset("regression")
++        self._prev_workload_sig = set(curr_sig)
+         return None
++
+     def run(
+             self,
+             workload: List[str],
+diff --git a/adasel/config/adaselect_g0_phase1_curr_only.json b/adasel/config/adaselect_g0_phase1_curr_only.json
+index f4ba7d7..74025de 100644
+--- a/adasel/config/adaselect_g0_phase1_curr_only.json
++++ b/adasel/config/adaselect_g0_phase1_curr_only.json
+@@ -33,5 +33,17 @@
+   "wdcg_dml_threshold": 0.4,
+   "wdcg_table_stats_batch_size": 200,
+   "wdcg_dml_ema_alpha": 0.3,
+-  "wdcg_dml_ema_tau_sec": 300.0
++  "wdcg_dml_ema_tau_sec": 300.0,
++  "choose_policy": "retain_swap",
++  "retain_swap_delta": 0.05,
++  "retain_swap_admit_floor": 0.0,
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
+ }
+diff --git a/adasel/config/adaselect_g0_phase1_mainline.json b/adasel/config/adaselect_g0_phase1_mainline.json
+index 1ce34c2..c815cdf 100644
+--- a/adasel/config/adaselect_g0_phase1_mainline.json
++++ b/adasel/config/adaselect_g0_phase1_mainline.json
+@@ -33,5 +33,26 @@
+   "wdcg_dml_threshold": 0.4,
+   "wdcg_table_stats_batch_size": 200,
+   "wdcg_dml_ema_alpha": 0.3,
+-  "wdcg_dml_ema_tau_sec": 300.0
++  "wdcg_dml_ema_tau_sec": 300.0,
++  "choose_policy": "retain_swap",
++  "retain_swap_delta": 0.05,
++  "retain_swap_admit_floor": 0.0,
++  "retain_swap_keep_bonus": 0.2,
++  "retain_swap_curr_bonus": 0.15,
++  "retain_swap_structural_weight": 0.25,
++  "retain_swap_support_weight": 0.1,
++  "retain_swap_stale_weight": 0.15,
++  "retain_swap_risk_weight": 0.1,
++  "retain_swap_maintenance_weight": 0.05,
++  "retain_swap_create_cost_weight": 1.0,
++  "retain_swap_stale_horizon": 10,
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
+ }
+diff --git a/adasel/config/adaselect_g0_phase1_retain_swap.json b/adasel/config/adaselect_g0_phase1_retain_swap.json
+new file mode 100644
+index 0000000..c815cdf
+--- /dev/null
++++ b/adasel/config/adaselect_g0_phase1_retain_swap.json
+@@ -0,0 +1,58 @@
++{
++  "max_num": 10,
++  "alpha": 0.65,
++  "beta": 1.1,
++  "optimizer_ratio": 0.5,
++  "timeout": 30000,
++  "min_width": 1,
++  "max_width": 2,
++  "rsfe_decay": 0.9,
++  "lambda_policy": "adaptive",
++  "wdcg_enabled": true,
++  "wdcg_topk": 40,
++  "wdcg_extractor_mode": "hybrid_shadow",
++  "wdcg_graph_shadow_on": true,
++  "wdcg_graph_fail_open": false,
++  "wdcg_graph_ast_backend": "sqlglot",
++  "wdcg_graph_sql_dialect": "postgres",
++  "wdcg_graph_normalize_predicates": true,
++  "wdcg_graph_dnf_max_terms": 8,
++  "wdcg_graph_factor_max_atoms": 8,
++  "wdcg_use_plan": true,
++  "g0_selection_quality_min": 0.55,
++  "g0_selection_cap_per_table": 8,
++  "g0_selection_enable_eqeq": true,
++  "g0_selection_enable_eqrange": true,
++  "g0_selection_enable_expr": false,
++  "g0_selection_require_same_factor": true,
++  "g0_keep_enabled": true,
++  "g0_merge_enabled": false,
++  "phase0_compile_validation": false,
++  "wdcg_enable_table_filter": true,
++  "wdcg_min_table_rows": 10000,
++  "wdcg_dml_threshold": 0.4,
++  "wdcg_table_stats_batch_size": 200,
++  "wdcg_dml_ema_alpha": 0.3,
++  "wdcg_dml_ema_tau_sec": 300.0,
++  "choose_policy": "retain_swap",
++  "retain_swap_delta": 0.05,
++  "retain_swap_admit_floor": 0.0,
++  "retain_swap_keep_bonus": 0.2,
++  "retain_swap_curr_bonus": 0.15,
++  "retain_swap_structural_weight": 0.25,
++  "retain_swap_support_weight": 0.1,
++  "retain_swap_stale_weight": 0.15,
++  "retain_swap_risk_weight": 0.1,
++  "retain_swap_maintenance_weight": 0.05,
++  "retain_swap_create_cost_weight": 1.0,
++  "retain_swap_stale_horizon": 10,
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
++}
+diff --git a/adasel/config/adaselect_g0_phase1_topk_beta.json b/adasel/config/adaselect_g0_phase1_topk_beta.json
+new file mode 100644
+index 0000000..4b92123
+--- /dev/null
++++ b/adasel/config/adaselect_g0_phase1_topk_beta.json
+@@ -0,0 +1,47 @@
++{
++  "max_num": 10,
++  "alpha": 0.65,
++  "beta": 1.1,
++  "optimizer_ratio": 0.5,
++  "timeout": 30000,
++  "min_width": 1,
++  "max_width": 2,
++  "rsfe_decay": 0.9,
++  "lambda_policy": "adaptive",
++  "wdcg_enabled": true,
++  "wdcg_topk": 40,
++  "wdcg_extractor_mode": "hybrid_shadow",
++  "wdcg_graph_shadow_on": true,
++  "wdcg_graph_fail_open": false,
++  "wdcg_graph_ast_backend": "sqlglot",
++  "wdcg_graph_sql_dialect": "postgres",
++  "wdcg_graph_normalize_predicates": true,
++  "wdcg_graph_dnf_max_terms": 8,
++  "wdcg_graph_factor_max_atoms": 8,
++  "wdcg_use_plan": true,
++  "g0_selection_quality_min": 0.55,
++  "g0_selection_cap_per_table": 8,
++  "g0_selection_enable_eqeq": true,
++  "g0_selection_enable_eqrange": true,
++  "g0_selection_enable_expr": false,
++  "g0_selection_require_same_factor": true,
++  "g0_keep_enabled": true,
++  "g0_merge_enabled": false,
++  "phase0_compile_validation": false,
++  "wdcg_enable_table_filter": true,
++  "wdcg_min_table_rows": 10000,
++  "wdcg_dml_threshold": 0.4,
++  "wdcg_table_stats_batch_size": 200,
++  "wdcg_dml_ema_alpha": 0.3,
++  "wdcg_dml_ema_tau_sec": 300.0,
++  "choose_policy": "topk_beta",
++  "timeout_policy": "replan",
++  "timeout_reset_after": 2,
++  "timeout_shift_similarity_threshold": 0.35,
++  "timeout_force_full_budget": true,
++  "timeout_retain_penalty": 0.75,
++  "timeout_disable_keep_bonus": true,
++  "timeout_delta_scale": 0.5,
++  "timeout_drop_unsupported_old": true,
++  "timeout_drop_floor": 0.5
++}
+diff --git a/adasel/main.py b/adasel/main.py
+index 50fe2c1..130fe65 100644
+--- a/adasel/main.py
++++ b/adasel/main.py
+@@ -373,6 +373,11 @@ def main() -> int:
+                 timeout_round = 1
+         exec_ms = float(sum(runtimes))
+         exec_wall_ms = (perf_counter() - exec_start) * 1000.0
++        try:
++            timeout_limit = float(getattr(tuner, "timeout", cfg_obj.get("timeout", TIMEOUT_PENALTY_MS)))
++            timeout_round = 1 if any(float(x) >= timeout_limit for x in runtimes) else int(timeout_round)
++        except Exception:
++            pass
+ 
+         # (2) drop virtual indexes
+         try:
+@@ -504,6 +509,20 @@ def main() -> int:
+             decision_ratio=(getattr(tuner, "_last_decision_stats", {}) or {}).get("ratio", None),
+             decision_old_benefit=(getattr(tuner, "_last_decision_stats", {}) or {}).get("old_benefit", None),
+             decision_new_benefit=(getattr(tuner, "_last_decision_stats", {}) or {}).get("new_benefit", None),
++            decision_policy=(getattr(tuner, "_last_decision_stats", {}) or {}).get("policy", None),
++            delta_swap=(getattr(tuner, "_last_decision_stats", {}) or {}).get("delta_swap", None),
++            retained_old_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("retained_old_count", None),
++            admitted_new_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("admitted_new_count", None),
++            dropped_old_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("dropped_old_count", None),
++            swap_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("swap_count", None),
++            blocked_swap_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("blocked_swap_count", None),
++            visible_action_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("visible_total", None),
++            timeout_state=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_state", getattr(tuner, "_timeout_state", None)),
++            timeout_recovery_action=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_recovery_action", getattr(tuner, "_timeout_recovery_action", None)),
++            timeout_workload_similarity=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_workload_similarity", getattr(tuner, "_timeout_workload_similarity", None)),
++            timeout_bad_old_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_bad_old_count", len(getattr(tuner, "_timeout_bad_old_conf", set()) or set())),
++            timeout_full_budget=wdcg_stats.get("timeout_full_budget", None),
++            timeout_drop_count=(getattr(tuner, "_last_decision_stats", {}) or {}).get("timeout_drop_count", None),
+             corr_trials=wdcg_stats.get("corr_trials", None),
+             old_relevant_count=wdcg_stats.get("old_relevant_count", None),
+             old_relevant_not_appearing_count=wdcg_stats.get("old_relevant_not_appearing_count", None),
+diff --git a/adaselect_pp/tests/test_retain_swap_choose_config.py b/adaselect_pp/tests/test_retain_swap_choose_config.py
+new file mode 100644
+index 0000000..84fee57
+--- /dev/null
++++ b/adaselect_pp/tests/test_retain_swap_choose_config.py
+@@ -0,0 +1,270 @@
++from types import SimpleNamespace
++
++
++from adasel.ada_select import AdaSelect
++from adaselect_pp.core.types import InstalledIndexState
++
++
++IndexKey = tuple[str, tuple[str, ...]]
++
++
++def _idx(col: str) -> IndexKey:
++    return ("t", (col,))
++
++
++def _state(key: IndexKey, *, last: int = 5) -> InstalledIndexState:
++    return InstalledIndexState(
++        key=key,
++        is_merge=False,
++        base_key=key,
++        family="BASE",
++        width=len(key[1]),
++        installed_round=0,
++        last_selected_round=last,
++    )
++
++
++def _mk_tuner(*, max_num: int = 1, costs=None) -> AdaSelect:
++    t = AdaSelect.__new__(AdaSelect)
++    t.max_num = max_num
++    t.beta = 1.1
++    t.workload_count = 5
++    t.choose_policy = "retain_swap"
++    t.timeout = 30_000
++    t.timeout_policy = "replan"
++    t.timeout_reset_after = 2
++    t.timeout_shift_similarity_threshold = 0.35
++    t.timeout_force_full_budget = True
++    t.timeout_retain_penalty = 0.75
++    t.timeout_disable_keep_bonus = True
++    t.timeout_delta_scale = 0.50
++    t.timeout_drop_unsupported_old = True
++    t.timeout_drop_floor = 0.50
++    t.consecutive_timeouts = 0
++    t.last_stable_config = set()
++    t._timeout_state = "normal"
++    t._timeout_recovery_action = ""
++    t._timeout_workload_similarity = None
++    t._timeout_bad_old_conf = set()
++    t._timeout_force_full_budget_once = False
++    t._last_stable_workload_sig = set()
++    t._prev_workload_sig = set()
++
++    t.retain_swap_delta = 0.05
++    t.retain_swap_admit_floor = 0.0
++    t.retain_swap_keep_bonus = 0.20
++    t.retain_swap_curr_bonus = 0.15
++    t.retain_swap_structural_weight = 0.25
++    t.retain_swap_support_weight = 0.10
++    t.retain_swap_stale_weight = 0.15
++    t.retain_swap_risk_weight = 0.10
++    t.retain_swap_maintenance_weight = 0.05
++    t.retain_swap_create_cost_weight = 1.0
++    t.retain_swap_stale_horizon = 10
++    t.retain_swap_max_blocked_log = 20
++
++    t.columns_benefit = {}
++    t.idx_abs_error_smooth = {}
++    t.idx_seen_cnt = {}
++    t.cost_model = SimpleNamespace(index_costs=dict(costs or {}))
++    t.installed_index_state = {}
++
++    t._m_stats = {
++        "what_if_calls": 0,
++        "candidate_count": 0,
++        "evaluated_count": 0,
++        "reconf_add": 0,
++        "reconf_drop": 0,
++        "trans_create": 0.0,
++        "trans_drop": 0.0,
++    }
++    t._last_evaluated_set = set()
++    t._last_eval_order = []
++    t._last_appearing_curr_set = set()
++    t._last_keep_visible_set = set()
++    t._last_visible_action_set = set()
++    t._last_candidate_conf = set()
++    t._last_final_conf = set()
++    t._last_net_benefit_map = {}
++    t._last_obs_delta_map = {}
++    t._last_obs_src_map = {}
++    t._last_support_count_map = {}
++    t._last_main_target_set = set()
++    t._last_corr_target_set = set()
++    t._last_index_meta_map = {}
++    t._last_retention_score_map = {}
++    t._last_admission_score_map = {}
++    t._last_swap_partner_map = {}
++    t._last_blocked_swap_map = {}
++    t._last_decision_stats = {}
++    t._last_wdcg_score_map = {}
++    t._last_wdcg_stats = {}
++    t._last_deadzone_stats = {"deadzone_old_support": 0, "deadzone_blocked": 0}
++    return t
++
++
++def test_retain_swap_swaps_when_admission_beats_retention_delta():
++    old = _idx("a")
++    new = _idx("b")
++    t = _mk_tuner(max_num=1, costs={old[1]: 0.0, new[1]: 0.0})
++    t.columns_benefit = {old: 0.1, new: 10.0}
++    t._last_appearing_curr_set = {new}
++    t._last_wdcg_score_map = {new: 1.0, old: 0.0}
++    t._last_support_count_map = {new: 3}
++    t.installed_index_state = {old: _state(old)}
++
++    before_state = dict(t.installed_index_state)
++    selected = set(t._choose_config({old}))
++
++    assert selected == {new}
++    assert t.installed_index_state == before_state  # state is refreshed only after final new_conf externally
++    assert t._last_decision_stats["swap_count"] == 1
++    assert t._last_decision_stats["admitted_new"] == [new]
++    assert t._last_decision_stats["dropped_old"] == [old]
++
++    t._refresh_installed_index_state(selected)
++    assert new in t.installed_index_state
++    assert old not in t.installed_index_state
++
++
++def test_keep_visible_bonus_blocks_marginal_newcomer():
++    old = _idx("a")
++    new = _idx("b")
++    t = _mk_tuner(max_num=1, costs={old[1]: 0.0, new[1]: 0.20})
++    t.columns_benefit = {old: 0.60, new: 0.61}
++    t._last_appearing_curr_set = {new}
++    t._last_keep_visible_set = {old}
++    t.installed_index_state = {old: _state(old)}
++
++    selected = set(t._choose_config({old}))
++
++    assert selected == {old}
++    assert t._last_decision_stats["retained_old"] == [old]
++    assert t._last_decision_stats["admitted_new"] == []
++    assert t._last_decision_stats["blocked_swap_count"] == 1
++    assert t._last_retention_score_map[old] > t._last_admission_score_map[new]
++
++
++def test_keep_visible_cannot_expand_action_space():
++    old = _idx("a")
++    stray_keep = _idx("k")
++    t = _mk_tuner(max_num=1)
++    t._last_appearing_curr_set = set()
++    t._last_keep_visible_set = {stray_keep}
++
++    raised = False
++    try:
++        t._choose_config({old})
++    except RuntimeError as exc:
++        raised = True
++        assert "keep_visible must be a subset" in str(exc)
++    assert raised
++
++
++def test_appearing_curr_and_keep_visible_must_be_disjoint():
++    old = _idx("a")
++    t = _mk_tuner(max_num=1)
++    t._last_appearing_curr_set = {old}
++    t._last_keep_visible_set = {old}
++
++    raised = False
++    try:
++        t._choose_config({old})
++    except RuntimeError as exc:
++        raised = True
++        assert "appearing_curr and keep_visible" in str(exc)
++    assert raised
++
++
++def test_cold_start_seeds_from_visible_current_candidates_even_when_scores_are_zero_after_cost():
++    a = _idx("a")
++    b = _idx("b")
++    t = _mk_tuner(max_num=2)  # default create cost is 1.0; local A can be negative.
++    t.columns_benefit = {a: 0.0, b: 0.0}
++    t._last_appearing_curr_set = {a, b}
++
++    selected = set(t._choose_config(set()))
++
++    assert selected == {a, b}
++    assert t._last_decision_stats["policy"] == "retain_swap"
++    assert t._last_decision_stats["admitted_new_count"] == 2
++    assert t._last_visible_action_set == {a, b}
++
++
++
++def test_timeout_recovery_replans_current_workload_without_rollback_or_physical_reset():
++    old = _idx("old_phase")
++    stable = _idx("stable_old_phase")
++    t = _mk_tuner(max_num=1)
++    t.timeout = 100
++    t.workload_count = 5
++    t.last_stable_config = {stable}
++    t._last_stable_workload_sig = t._workload_timeout_signature([
++        "select * from orders where o_orderstatus = 'F'"
++    ])
++
++    class DB2:
++        dropped = False
++        def drop_all_indexes(self):  # should never be called by timeout policy
++            self.dropped = True
++
++    t.db_con2 = DB2()
++    old_conf = {old}
++
++    forced = t._handle_timeout_policy(
++        [100],
++        old_conf,
++        ["select * from lineitem where l_shipdate > date '1998-01-01'"],
++    )
++
++    assert forced is None
++    assert old_conf == {old}
++    assert t.db_con2.dropped is False
++    assert t._timeout_state == "timeout_phase_shift"
++    assert t._timeout_recovery_action == "replan_current_workload"
++    assert t._timeout_bad_old_conf == {old}
++    assert t._timeout_force_full_budget_once is True
++
++
++def test_timeout_penalty_disables_keep_bonus_and_prefers_current_phase_newcomer():
++    old = _idx("old_phase")
++    new = _idx("new_phase")
++    t = _mk_tuner(max_num=1, costs={old[1]: 0.0, new[1]: 0.0})
++    t.columns_benefit = {old: 10.0, new: 9.0}
++    t._last_appearing_curr_set = {new}
++    t._last_keep_visible_set = {old}
++    t._last_wdcg_score_map = {new: 1.0, old: 0.0}
++    t._last_support_count_map = {new: 3}
++    t.installed_index_state = {old: _state(old)}
++    t._timeout_state = "timeout_phase_shift"
++    t._timeout_recovery_action = "replan_current_workload"
++    t._timeout_bad_old_conf = {old}
++
++    selected = set(t._choose_config({old}))
++
++    assert selected == {new}
++    assert t._last_decision_stats["timeout_state"] == "timeout_phase_shift"
++    assert t._last_decision_stats["timeout_bad_old_count"] == 1
++    assert t._last_decision_stats["timeout_drop_count"] == 1
++    assert t._last_decision_stats["swap_count"] == 0
++    assert t._last_decision_stats["admitted_new"] == [new]
++    assert t._last_decision_stats["dropped_old"] == [old]
++    assert t._last_retention_score_map[old] < t._last_admission_score_map[new]
++
++
++
++def test_timeout_recovery_can_drop_unsupported_old_without_replacement():
++    old = _idx("old_phase")
++    t = _mk_tuner(max_num=1, costs={old[1]: 0.0})
++    t.columns_benefit = {old: 10.0}
++    t._last_appearing_curr_set = set()
++    t._last_keep_visible_set = {old}
++    t.installed_index_state = {old: _state(old)}
++    t._timeout_state = "timeout_phase_shift"
++    t._timeout_bad_old_conf = {old}
++
++    selected = set(t._choose_config({old}))
++
++    assert selected == set()
++    assert t._last_decision_stats["timeout_drop_count"] == 1
++    assert t._last_decision_stats["dropped_old"] == [old]
+diff --git a/scripts/run_phase15_retainswap_firstpass.sh b/scripts/run_phase15_retainswap_firstpass.sh
+new file mode 100644
+index 0000000..2647f71
+--- /dev/null
++++ b/scripts/run_phase15_retainswap_firstpass.sh
+@@ -0,0 +1,64 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++
++cd "$(dirname "$0")/.."
++
++# Phase 1.5 first-pass matrix:
++#   - E1 slice: CurrOnly vs CurrKeep under retain/swap
++#   - E2 slice: TopK/Beta vs RetainSwap under CurrKeep
++# Workloads chosen from the handoff: tpchs_shifting, tpchs_noisy, job_random.
++
++CFG_DIR="adasel/config"
++RUN_ROOT="runs_phase15_retainswap_firstpass"
++mkdir -p "${RUN_ROOT}"
++
++VARIANT_CFGS=(
++  "curr_only_retain_swap:${CFG_DIR}/adaselect_g0_phase1_curr_only.json"
++  "curr_keep_topk_beta:${CFG_DIR}/adaselect_g0_phase1_topk_beta.json"
++  "curr_keep_retain_swap:${CFG_DIR}/adaselect_g0_phase1_retain_swap.json"
++)
++
++WORKLOAD_FILTERS=(
++  "tpchs shifting"
++  "tpchs noisy"
++  "job random"
++)
++
++for entry in "${VARIANT_CFGS[@]}"; do
++  variant="${entry%%:*}"
++  cfg="${entry#*:}"
++  [[ -f "${cfg}" ]] || { echo "missing cfg: ${cfg}" >&2; exit 2; }
++
++  echo "===== Phase1.5 variant=${variant} cfg=${cfg} ====="
++  cp "${cfg}" "${CFG_DIR}/adaselect.json"
++
++  stamp="$(mktemp)"
++  touch "${stamp}"
++
++  for filt in "${WORKLOAD_FILTERS[@]}"; do
++    echo "===== variant=${variant} case=${filt} ====="
++    TRACE=1 \
++    LAM_POLICIES=adaptive \
++    WDCG_VALUES=1 \
++    MIN_WIDTH=1 \
++    MAX_WIDTH=2 \
++    CASES_FILTER="${filt}" \
++    bash scripts/sweep_adaselect_lambda_wdcg.sh
++  done
++
++  out_dir="${RUN_ROOT}/${variant}"
++  mkdir -p "${out_dir}/log" "${out_dir}/analysis"
++  find log -maxdepth 1 -type f -newer "${stamp}" -exec mv -t "${out_dir}/log" {} + || true
++  if [[ -d analysis ]]; then
++    find analysis -maxdepth 1 -type f -newer "${stamp}" -exec mv -t "${out_dir}/analysis" {} + || true
++  fi
++  rm -f "${stamp}"
++done
++
++cat <<'MSG'
++[done] Phase 1.5 first-pass logs are under runs_phase15_retainswap_firstpass/.
++Suggested first checks:
++  1. Metrics CSV: decision_policy, retained_old_count, admitted_new_count, dropped_old_count, swap_count, blocked_swap_count, stability_score.
++  2. Trace CSV: source_lane, selected_curr, selected_keep, in_main_target, in_corr_target, retain_score, admission_score, swap_partner, swap_gain.
++  3. Workload semantics: boundary windows for tpchs_shifting, intrusion windows for tpchs_noisy, mixed-stream pressure for job_random.
++MSG
+diff --git a/util/metrics_recorder.py b/util/metrics_recorder.py
+index aac5f45..161841e 100644
+--- a/util/metrics_recorder.py
++++ b/util/metrics_recorder.py
+@@ -114,6 +114,15 @@ class MetricsRecorder:
+         "decision_ratio",
+         "decision_old_benefit",
+         "decision_new_benefit",
++        # Phase 1.5 retain/swap decision diagnostics
++        "decision_policy",
++        "delta_swap",
++        "retained_old_count",
++        "admitted_new_count",
++        "dropped_old_count",
++        "swap_count",
++        "blocked_swap_count",
++        "visible_action_count",
+         # WDCG correctness diagnostics
+         "corr_trials",
+         "old_relevant_count",
+@@ -137,8 +146,14 @@ class MetricsRecorder:
+         # configurations
+         "old",
+         "new",
+-        # robustness
++        # robustness / timeout recovery
+         "timeout",
++        "timeout_state",
++        "timeout_recovery_action",
++        "timeout_workload_similarity",
++        "timeout_bad_old_count",
++        "timeout_full_budget",
++        "timeout_drop_count",
+         "exit_code",
+         "message",
+     )
+diff --git a/util/trace_recorder.py b/util/trace_recorder.py
+index 9954a92..bb224df 100644
+--- a/util/trace_recorder.py
++++ b/util/trace_recorder.py
+@@ -54,15 +54,27 @@ class TraceRecorder:
+         "deadzone_old_support",
+         "deadzone_blocked",
+         "status",  # kept/added/dropped/rejected
++        "source_lane",
++        "selected_curr",
++        "selected_keep",
+         "in_old",
+         "in_new",
+         "in_eval",
+         "in_appearing",
++        "in_keep_visible",
++        "in_visible_action",
++        "in_main_target",
++        "in_corr_target",
+         "in_candidate",
+         "rank",  # within eval-order if available
+         "wdcg_score",
+         "benefit",  # raw (algorithm-internal)
+         "net_benefit",
++        "retain_score",
++        "admission_score",
++        "swap_partner",
++        "swap_gain",
++        "swap_blocked_reason",
+         "obs_delta",
+         "obs_src",
+         "creation_cost",
+@@ -143,6 +155,10 @@ class TraceRecorder:
+ 
+         ev: Set[IndexKey] = set(evaluated_set or set())
+         appearing: Set[IndexKey] = set()
++        keep_visible: Set[IndexKey] = set()
++        visible_action: Set[IndexKey] = set()
++        main_targets: Set[IndexKey] = set()
++        corr_targets: Set[IndexKey] = set()
+         candidate: Set[IndexKey] = set()
+         compile_rejected: Set[IndexKey] = set()
+         meta_map: Dict[IndexKey, Any] = {}
+@@ -152,6 +168,22 @@ class TraceRecorder:
+                 appearing = set(getattr(tuner, "_last_appearing_set", set()) or set())
+             except Exception:
+                 appearing = set()
++            try:
++                keep_visible = set(getattr(tuner, "_last_keep_visible_set", set()) or set())
++            except Exception:
++                keep_visible = set()
++            try:
++                visible_action = set(getattr(tuner, "_last_visible_action_set", set()) or set())
++            except Exception:
++                visible_action = set()
++            try:
++                main_targets = set(getattr(tuner, "_last_main_target_set", set()) or set())
++            except Exception:
++                main_targets = set()
++            try:
++                corr_targets = set(getattr(tuner, "_last_corr_target_set", set()) or set())
++            except Exception:
++                corr_targets = set()
+             try:
+                 candidate = set(getattr(tuner, "_last_candidate_conf", set()) or set())
+             except Exception:
+@@ -163,12 +195,23 @@ class TraceRecorder:
+             try:
+                 _gen = getattr(tuner, "_wdcg_gen", None)
+                 if _gen is not None and isinstance(getattr(getattr(_gen, "enum", None), "last_meta", None), dict):
+-                    meta_map = getattr(getattr(_gen, "enum", None), "last_meta", {}) or {}
+-                    compile_rejected = {k for k, m in meta_map.items() if isinstance(m, dict) and m.get("compile_valid", None) is False}
++                    meta_map = dict(getattr(getattr(_gen, "enum", None), "last_meta", {}) or {})
+             except Exception:
+                 meta_map = {}
++            try:
++                tuner_meta = getattr(tuner, "_last_index_meta_map", {}) or {}
++                if isinstance(tuner_meta, dict):
++                    merged_meta = dict(meta_map)
++                    for mk, mv in tuner_meta.items():
++                        if isinstance(mv, dict):
++                            base = dict(merged_meta.get(mk, {}) or {})
++                            base.update(mv)
++                            merged_meta[mk] = base
++                    meta_map = merged_meta
++                compile_rejected = {k for k, m in meta_map.items() if isinstance(m, dict) and m.get("compile_valid", None) is False}
++            except Exception:
+                 compile_rejected = set()
+-        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected)
++        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | keep_visible | visible_action | candidate | compile_rejected)
+ 
+         # Per-round WDCG funnel stats (optional; repeat on each row)
+         wdcg_stats: Dict[str, Any] = {}
+@@ -211,6 +254,10 @@ class TraceRecorder:
+ 
+         wdcg_score_map: Dict[IndexKey, Any] = {}
+         net_benefit_map: Dict[IndexKey, Any] = {}
++        retain_score_map: Dict[IndexKey, Any] = {}
++        admission_score_map: Dict[IndexKey, Any] = {}
++        swap_partner_map: Dict[IndexKey, Any] = {}
++        blocked_swap_map: Dict[IndexKey, Any] = {}
+         obs_delta_map: Dict[IndexKey, Any] = {}
+         obs_src_map: Dict[IndexKey, Any] = {}
+         decision_stats: Dict[str, Any] = {}
+@@ -223,6 +270,22 @@ class TraceRecorder:
+                 net_benefit_map = getattr(tuner, "_last_net_benefit_map", {}) or {}
+             except Exception:
+                 net_benefit_map = {}
++            try:
++                retain_score_map = getattr(tuner, "_last_retention_score_map", {}) or {}
++            except Exception:
++                retain_score_map = {}
++            try:
++                admission_score_map = getattr(tuner, "_last_admission_score_map", {}) or {}
++            except Exception:
++                admission_score_map = {}
++            try:
++                swap_partner_map = getattr(tuner, "_last_swap_partner_map", {}) or {}
++            except Exception:
++                swap_partner_map = {}
++            try:
++                blocked_swap_map = getattr(tuner, "_last_blocked_swap_map", {}) or {}
++            except Exception:
++                blocked_swap_map = {}
+             try:
+                 obs_delta_map = getattr(tuner, "_last_obs_delta_map", {}) or {}
+             except Exception:
+@@ -253,6 +316,10 @@ class TraceRecorder:
+             in_new = k in final_conf_logged
+             in_eval = k in ev
+             in_appearing = k in appearing
++            in_keep_visible = k in keep_visible
++            in_visible_action = k in visible_action
++            in_main_target = k in main_targets
++            in_corr_target = k in corr_targets
+             in_candidate = k in candidate
+             meta = meta_map.get(k, {}) if isinstance(meta_map, dict) else {}
+             compile_valid = meta.get("compile_valid", "") if isinstance(meta, dict) else ""
+@@ -293,6 +360,45 @@ class TraceRecorder:
+             except Exception:
+                 net_benefit = ""
+ 
++            retain_score = ""
++            try:
++                if k in retain_score_map:
++                    retain_score = float(retain_score_map.get(k, ""))
++            except Exception:
++                retain_score = ""
++
++            admission_score = ""
++            try:
++                if k in admission_score_map:
++                    admission_score = float(admission_score_map.get(k, ""))
++            except Exception:
++                admission_score = ""
++
++            swap_partner = ""
++            try:
++                if k in swap_partner_map:
++                    swap_partner = repr(swap_partner_map.get(k, ""))
++            except Exception:
++                swap_partner = ""
++
++            swap_gain = ""
++            try:
++                if k in swap_partner_map:
++                    partner = swap_partner_map.get(k)
++                    if k in admission_score_map and partner in retain_score_map:
++                        swap_gain = float(admission_score_map.get(k, 0.0)) - float(retain_score_map.get(partner, 0.0))
++                    elif k in retain_score_map and partner in admission_score_map:
++                        swap_gain = float(admission_score_map.get(partner, 0.0)) - float(retain_score_map.get(k, 0.0))
++            except Exception:
++                swap_gain = ""
++
++            swap_blocked_reason = ""
++            try:
++                if k in blocked_swap_map and isinstance(blocked_swap_map.get(k), dict):
++                    swap_blocked_reason = blocked_swap_map.get(k, {}).get("reason", "")
++            except Exception:
++                swap_blocked_reason = ""
++
+             obs_delta = ""
+             try:
+                 if k in obs_delta_map:
+@@ -341,15 +447,27 @@ class TraceRecorder:
+                 "deadzone_old_support": deadzone_old_support,
+                 "deadzone_blocked": deadzone_blocked,
+                 "status": status,
++                "source_lane": meta.get("source_lane", "") if isinstance(meta, dict) else "",
++                "selected_curr": meta.get("selected_curr", 1 if in_appearing else 0) if isinstance(meta, dict) else (1 if in_appearing else 0),
++                "selected_keep": meta.get("selected_keep", 1 if in_keep_visible else 0) if isinstance(meta, dict) else (1 if in_keep_visible else 0),
+                 "in_old": 1 if in_old else 0,
+                 "in_new": 1 if in_new else 0,
+                 "in_eval": 1 if in_eval else 0,
+                 "in_appearing": 1 if in_appearing else 0,
++                "in_keep_visible": 1 if in_keep_visible else 0,
++                "in_visible_action": 1 if in_visible_action else 0,
++                "in_main_target": 1 if in_main_target else 0,
++                "in_corr_target": 1 if in_corr_target else 0,
+                 "in_candidate": 1 if in_candidate else 0,
+                 "rank": rank_map.get(k, ""),
+                 "wdcg_score": wdcg_score,
+                 "benefit": benefit,
+                 "net_benefit": net_benefit,
++                "retain_score": retain_score,
++                "admission_score": admission_score,
++                "swap_partner": swap_partner,
++                "swap_gain": swap_gain,
++                "swap_blocked_reason": swap_blocked_reason,
+                 "obs_delta": obs_delta,
+                 "obs_src": obs_src,
+                 "creation_cost": creation_cost,
