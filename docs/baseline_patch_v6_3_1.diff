@@ -1,0 +1,9 @@
+diff --git a/adaselect_pp/core/enumerator.py b/adaselect_pp/core/enumerator.py
++ Added table pre-filtering (_should_skip_table) based on row_count and dml_ratio.
++ Updated enumerate() to skip small/high-churn tables.
+
+diff --git a/adaselect_pp/core/ranker.py b/adaselect_pp/core/ranker.py
++ Added DML penalty proxy (_dml_penalty) to adjust gain by table write frequency.
+
+diff --git a/adaselect_pp/core/generator.py b/adaselect_pp/core/generator.py
++ Integrated table_stats fetching and propagation across enumerator and ranker.

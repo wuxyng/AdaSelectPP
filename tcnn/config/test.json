@@ -1,0 +1,7 @@
+{
+    "mode": "test",
+    "benchmark": "tpch",
+    "before_episode": 0,
+    "cuda": 1,
+    "test_dataset": "tcnn/dataset/tpch_10_3_10_3.txt"
+}

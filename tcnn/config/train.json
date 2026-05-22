@@ -1,0 +1,11 @@
+{
+    "mode": "train",
+    "benchmark": "job",
+    "before_episode": 0,
+    "cuda": 0,
+    "save_interval": 1,
+    "test_dataset": "tcnn/dataset/job_10_3_10_3.txt",
+    "train_dataset": "tcnn/dataset/job_10_3_10_3.txt",
+    "episode_num": 10,
+    "batch_size": 64
+}

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE/editor files
+.idea/
+.vscode/
+
+# Runtime and experiment outputs
+log/
+logs/
+results/
+downloads/
+tcnn/net/
+
+# Generated analysis artifacts; keep analysis source files tracked.
+analysis/**/*.csv
+analysis/**/*.xlsx
+analysis/**/*.png
+analysis/**/*.jpg
+analysis/**/*.jpeg
+analysis/**/*.zip
+analysis/**/*.rar
+
+# Archives and installers
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.exe
+
+# OS files
+.DS_Store
+Thumbs.db

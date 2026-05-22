@@ -1,0 +1,44 @@
+Aggregate
+Append
+Bitmap Heap Scan
+Bitmap Index Scan
+BitmapAnd
+BitmapOr
+Custom Scan
+CTE Scan
+Foreign Scan
+Function Scan
+Gather
+Gather Merge
+Group
+GroupAggregate
+Hash
+HashAggregate
+Hash Join
+HashSetOp
+Incremental Sort
+Index Only Scan
+Index Scan
+Limit
+LockRows
+Materialize
+Merge Append
+Merge Join
+MixedAggregate
+ModifyTable
+Named Tuplestore Scan
+Nested Loop
+ProjectSet
+Recursive Union
+Result
+Sample Scan
+Seq Scan
+SetOp
+Sort
+Subquery Scan
+TableFunc Scan
+TID Scan
+Unique
+Values Scan
+WindowAgg
+WorkTable Scan

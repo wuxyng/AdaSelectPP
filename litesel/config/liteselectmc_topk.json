@@ -1,0 +1,10 @@
+{
+  "max_num": 10,
+  "alpha": 0.65,
+  "beta": 1.10,
+  "optimizer_ratio": 0.50,
+  "timeout": 30000,
+  "min_width": 1,
+  "max_width": 3,
+  "transition_mode": "symmetric"
+}

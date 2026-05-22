@@ -1,0 +1,427 @@
+python scripts/analyze_lambda_wdcg_sweep.py --glob "log/adaselect_tpch_shifting_*_lam*_wdcg*.csv"
+
+python scripts/analyze_lambda_wdcg_sweep.py --glob "logs/runs_phase15_retainswap_firstpass/*/log/adaselect_*_lam*_wdcg*.csv" --phase15_plots
+
+只看表，不画图：
+
+python scripts/analyze_lambda_wdcg_sweep.py --glob "runs_phase15_retainswap_firstpass/*/log/adaselect_*_lam*_wdcg*.csv" --no_plots
+
+
+筛某个 workload：
+
+python scripts/analyze_lambda_wdcg_sweep.py --glob "runs_phase15_retainswap_firstpass/*/log/adaselect_*_lam*_wdcg*.csv" --bench tpchs --wtype shifting --phase15_plots
+
+筛某个 variant：
+
+python scripts/analyze_lambda_wdcg_sweep.py --glob "runs_phase15_retainswap_firstpass/*/log/adaselect_*_lam*_wdcg*.csv" --variant curr_keep_retain_swap --phase15_plots
+
+
+-----------------------------------------------------------------------------------------------------
+跑 Phase 1.5 first-pass trace：
+
+python scripts/analyze_phase15_trace.py --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" --outdir analysis_phase15_trace
+
+
+筛某个 variant：
+
+python scripts/analyze_phase15_trace.py --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" --variant curr_keep_retain_swap --outdir analysis_phase15_trace_curr_keep_retain_swap
+
+
+筛 workload：
+
+python scripts/analyze_phase15_trace.py --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" --bench tpchs --wtype shifting --outdir analysis_phase15_trace_tpchs_shifting
+
+包含 rejected visible/evaluated rows：
+
+python scripts/analyze_phase15_trace.py --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" --include-rejected-events --outdir analysis_phase15_trace
+
+
+
+------------------------------------------------------------------------------------------------------
+
+
+已另写一个独立的 **trace-level analyzer**，只分析 per-index `*.trace.csv`，不和 `analyze_lambda_wdcg_sweep.py` 混在一起。
+
+产物：
+
+[下载 analyzer patch](sandbox:/mnt/data/analyze_phase15_trace_add.patch)
+[下载 zip：patch + scripts/analyze_phase15_trace.py](sandbox:/mnt/data/analyze_phase15_trace_add.zip)
+
+## 新增文件
+
+```text
+scripts/analyze_phase15_trace.py
+```
+
+这是 additive patch，不改现有 tuner / recorder / metrics analyzer。
+
+## 用法
+
+应用：
+
+```bash
+cd <repo-root>
+patch -p1 < analyze_phase15_trace_add.patch
+```
+
+跑 Phase 1.5 first-pass trace：
+
+```bash
+python scripts/analyze_phase15_trace.py \
+  --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" \
+  --outdir analysis_phase15_trace
+```
+
+筛某个 variant：
+
+```bash
+python scripts/analyze_phase15_trace.py \
+  --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" \
+  --variant curr_keep_retain_swap \
+  --outdir analysis_phase15_trace_curr_keep_retain_swap
+```
+
+筛 workload：
+
+```bash
+python scripts/analyze_phase15_trace.py \
+  --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" \
+  --bench tpchs \
+  --wtype shifting \
+  --outdir analysis_phase15_trace_tpchs_shifting
+```
+
+包含 rejected visible/evaluated rows：
+
+```bash
+python scripts/analyze_phase15_trace.py \
+  --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" \
+  --include-rejected-events \
+  --outdir analysis_phase15_trace
+```
+
+给 shifting/noisy 分析加 phase/boundary 标记：
+
+```bash
+python scripts/analyze_phase15_trace.py \
+  --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" \
+  --phase-size 5 \
+  --boundary-rounds 5,10,15,20 \
+  --boundary-window 1 \
+  --outdir analysis_phase15_trace
+```
+
+## 输出文件
+
+默认输出：
+
+```text
+analysis_phase15_trace/
+  phase15_trace_run_summary.csv
+  phase15_trace_round_summary.csv
+  phase15_trace_phase_summary.csv
+  phase15_trace_source_lane_summary.csv
+  phase15_trace_score_quantiles.csv
+  phase15_trace_events.csv
+  phase15_trace_index_lifecycle.csv
+  phase15_trace_swap_pairs.csv
+  phase15_trace_blocked_swaps.csv
+```
+
+可选输出完整 enriched trace：
+
+```bash
+python scripts/analyze_phase15_trace.py \
+  --glob "runs_phase15_retainswap_firstpass/*/log/*.trace.csv" \
+  --write-enriched \
+  --outdir analysis_phase15_trace
+```
+
+会额外生成：
+
+```text
+phase15_trace_rows_enriched.csv
+```
+
+默认也会生成几张 plot；不需要图时：
+
+```bash
+--no-plots
+```
+
+## 每个 summary 看什么
+
+### `phase15_trace_run_summary.csv`
+
+run-level 总览，适合比较 variant：
+
+```text
+variant
+bench
+wtype
+rounds
+mean_new_config_size
+final_config_size
+total_added
+total_dropped
+total_swap_added
+total_blocked_swaps
+total_open_slot_admits
+total_non_swap_drops
+keep_visible_retention_rate
+selected_keep_share
+swap_accept_rate_vs_blocked
+retain_score_gap_kept_minus_dropped
+admission_score_gap_added_minus_rejected
+blocked_reason_counts
+selected_source_lane_counts
+selected_family_counts
+```
+
+重点看：
+
+```text
+curr_only_retain_swap vs curr_keep_retain_swap:
+  keep_visible_retention_rate
+  selected_keep_share
+  total_swap_added
+  total_blocked_swaps
+  total_dropped
+
+curr_keep_topk_beta vs curr_keep_retain_swap:
+  total_churn
+  total_swap_added
+  retain_score_gap_kept_minus_dropped
+  admission_score_gap_added_minus_rejected
+```
+
+### `phase15_trace_round_summary.csv`
+
+round-level 行为，适合看 phase transition：
+
+```text
+round
+old_count
+new_count
+added_count
+dropped_count
+swap_added_count
+blocked_swap_count
+open_slot_admit_count
+non_swap_drop_count
+keep_visible_count
+keep_visible_retained_count
+keep_visible_dropped_count
+keep_visible_retention_rate
+selected_keep_share
+source_lane_counts
+selected_source_lane_counts
+blocked_reason_counts
+retain_score_kept_mean
+retain_score_dropped_mean
+admission_score_added_mean
+admission_score_rejected_visible_mean
+swap_gain_mean
+```
+
+重点看 phase boundary 附近：
+
+```text
+added_count / dropped_count
+swap_added_count
+blocked_swap_count
+keep_visible_retention_rate
+selected_keep_share
+```
+
+### `phase15_trace_phase_summary.csv`
+
+如果传了：
+
+```bash
+--phase-size 5
+```
+
+它会按：
+
+```text
+phase_id = round // phase_size
+```
+
+聚合。适合 `tpch/tpchs shifting/noisy` 的 block-level 观察。
+
+### `phase15_trace_events.csv`
+
+event-level rows，适合人工追踪具体 index：
+
+```text
+event_type
+status
+index_name
+source_lane
+family
+selected_curr
+selected_keep
+in_old
+in_new
+in_eval
+in_appearing
+in_keep_visible
+in_visible_action
+retain_score
+admission_score
+swap_partner
+swap_gain
+swap_blocked_reason
+```
+
+`event_type` 会归类为：
+
+```text
+swap_admit
+swap_drop
+admit
+drop
+blocked_swap
+compile_rejected
+rejected_visible        # 仅 --include-rejected-events
+rejected_evaluated      # 仅 --include-rejected-events
+```
+
+### `phase15_trace_index_lifecycle.csv`
+
+index-level 生命周期：
+
+```text
+index_name
+first_seen_round
+last_seen_round
+rounds_seen
+selected_rounds
+old_rounds
+eval_rounds
+appearing_rounds
+keep_visible_rounds
+visible_action_rounds
+kept_count
+added_count
+dropped_count
+rejected_count
+swap_event_count
+blocked_swap_count
+selected_rate_seen
+volatility_seen
+source_lane_mode
+family_mode
+benefit_mean
+retain_score_mean
+admission_score_mean
+```
+
+这个文件适合找：
+
+```text
+1. 反复进出的 unstable index
+2. 被 keep_visible 保护住的 old incumbent
+3. admission_score 高但一直 blocked 的 newcomer
+4. retention_score 低但仍被保留的 suspicious old index
+```
+
+### `phase15_trace_swap_pairs.csv`
+
+accepted swap pair 还原：
+
+```text
+round
+new_index
+old_index
+new_admission_score
+old_retain_score
+swap_gain
+new_source_lane
+old_source_lane
+new_family
+old_family
+```
+
+它通过：
+
+```text
+added row.swap_partner == dropped row.index_repr
+```
+
+把 admitted newcomer 和 dropped incumbent 配对。
+
+### `phase15_trace_blocked_swaps.csv`
+
+blocked swap rows：
+
+```text
+round
+index_name
+source_lane
+family
+admission_score
+retain_score
+swap_gain
+swap_blocked_reason
+```
+
+注意：当前 trace schema 主要记录了：
+
+```text
+swap_blocked_reason
+```
+
+如果 recorder 没有输出 blocked partner，那么 analyzer 不能完全反推出“这个 newcomer 被哪个 old incumbent 挡住”。脚本已经 future-proof：如果后续 trace 增加这些列，它会自动读取：
+
+```text
+swap_blocked_partner
+swap_blocked_gain
+swap_blocked_delta
+swap_blocked_old_score
+swap_blocked_new_score
+```
+
+## 我做过的验证
+
+已验证：
+
+```bash
+python3 -m py_compile scripts/analyze_phase15_trace.py
+```
+
+已验证 patch 可从 base repo apply：
+
+```bash
+patch -p1 < analyze_phase15_trace_add.patch
+python3 -m py_compile scripts/analyze_phase15_trace.py
+```
+
+也用 synthetic trace 跑过一次，能正确生成：
+
+```text
+phase15_trace_run_summary.csv
+phase15_trace_round_summary.csv
+phase15_trace_phase_summary.csv
+phase15_trace_source_lane_summary.csv
+phase15_trace_score_quantiles.csv
+phase15_trace_events.csv
+phase15_trace_index_lifecycle.csv
+phase15_trace_swap_pairs.csv
+phase15_trace_blocked_swaps.csv
+```
+
+synthetic case 中 accepted swap pair 被正确还原为：
+
+```text
+orders(o_orderkey) swaps with customer(c_custkey)
+```
+
+blocked swap 也被记录为：
+
+```text
+part(p_partkey), reason = below_delta_swap
+```
+
+另外，检索层提示部分早先上传的文件已经过期；本次 analyzer 不依赖重新读取那些文件。后续如果要继续基于旧上传论文或旧代码包做 diff，需要重新上传对应文件。

@@ -1,0 +1,68 @@
+--- adaselect_pp/core/generator.py
++++ adaselect_pp/core/generator.py
+@@ -660,10 +660,11 @@
+         # Old-conf anchors: always consider currently materialized indexes on touched tables.
+         old_conf_set: Set[IndexKey] = set(old_conf) if isinstance(old_conf, set) else set()
+ 
+-        # Bounded pair completion per table.
+-        # Keep tiny (JOB-safe): at most 2 join cols × 2 filter cols × 2 orders = 8 per table per query.
+-        pair_top_join = 2
+-        pair_top_filter = 2
++        # Bounded pair completion per table (JOB-safe).
++        # Default is conservative but must be large enough to cover TPC-H's 3-way join keys on LINEITEM
++        # (orderkey/partkey/suppkey). Cap is: pair_top_join × pair_top_filter × 2 orders per table per query.
++        pair_top_join = int(getattr(cfg, "pair_top_join", 3))
++        pair_top_filter = int(getattr(cfg, "pair_top_filter", 2))
+ 
+         for qi, qset in zip(q_infos, per_query_raw):
+             # anchors by table presence
+@@ -730,6 +731,16 @@
+                 tbl = str(tbl).lower()
+                 if tbl not in touched_tables:
+                     continue
++                # Pair completion should be JOB-safe: only apply on sufficiently large / low-DML tables.
++                tbl_norm = self._norm_tbl_name(tbl)
++                if min_table_rows and min_table_rows > 0:
++                    rows = int(tbl_rows.get(tbl_norm, 0) or 0)
++                    if rows > 0 and rows < min_table_rows:
++                        continue
++                if max_dml_ema is not None:
++                    if float(dml_ema_snapshot.get(tbl_norm, 0.0) or 0.0) > float(max_dml_ema):
++                        continue
++
+                 # respect table pruning if enabled (rows_snapshot is already applied to qi.tables, but be safe)
+                 if int(min_table_rows) > 0:
+                     try:
+@@ -739,9 +750,29 @@
+                     except Exception:
+                         pass
+ 
+-                join_cols = _top_cols(tbl, getattr(rc, "join_eq", []) or [], pair_top_join)
+-                # filter = eq + rng (join×range is the common blind spot; include both)
+-                filter_cols = _top_cols(tbl, list((getattr(rc, "filter_eq", []) or []) + (getattr(rc, "filter_rng", []) or [])), pair_top_filter)
++                join_raw = list(getattr(rc, "join_eq", []) or [])
++                # If join keys are few (<= pair_top_join), keep all to avoid losing TPC-H critical keys.
++                if len(join_raw) <= pair_top_join:
++                    join_cols = list(dict.fromkeys(join_raw))
++                else:
++                    join_cols = _top_cols(tbl, join_raw, pair_top_join)
++
++                # filter = eq + rng (join×range is the common blind spot; always prioritize range filters)
++                eq_raw = list(getattr(rc, "filter_eq", []) or [])
++                rng_raw = list(getattr(rc, "filter_rng", []) or [])
++                filter_cols: List[str] = []
++                if rng_raw:
++                    # keep at least 1 range filter if present
++                    k_rng = max(1, min(len(rng_raw), pair_top_filter))
++                    filter_cols.extend(_top_cols(tbl, rng_raw, k_rng))
++                    k_eq = max(0, pair_top_filter - len(filter_cols))
++                    if k_eq > 0 and eq_raw:
++                        for c in _top_cols(tbl, eq_raw, k_eq):
++                            if c not in filter_cols:
++                                filter_cols.append(c)
++                else:
++                    filter_cols = _top_cols(tbl, eq_raw, pair_top_filter)
++
+                 if not join_cols or not filter_cols:
+                     continue
+ 

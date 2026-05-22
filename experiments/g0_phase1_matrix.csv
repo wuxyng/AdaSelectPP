@@ -1,0 +1,3 @@
+variant,config,keep_enabled,trace,lambda_policy,wdcg,workloads
+V0_curr_only,adasel/config/adaselect_g0_phase1_curr_only.json,false,1,adaptive,1,"tpch random;tpchs random;tpchs noisy;tpchs shifting"
+V1_curr_keep,adasel/config/adaselect_g0_phase1_mainline.json,true,1,adaptive,1,"tpch random;tpchs random;tpchs noisy;tpchs shifting"
