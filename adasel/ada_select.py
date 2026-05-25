@@ -154,16 +154,24 @@ class AdaSelect:
         # Creation cost model.
         self.benefit_norm = BenefitNormalizer()
         try:
-            self.benefit_norm.load_creation_costs(benchmark, required=True)
+            self.benefit_norm.load_creation_costs(
+                benchmark,
+                required=True,
+                db_con=self.db_con1,
+                vocabulary=getattr(self.candidate_generator, "vocab", None),
+            )
         except Exception as exc:
             logger.error("creation-cost load failed for benchmark=%s: %s", benchmark, exc)
             raise
         logger.info(
-            "CreationCostDump | path=%s status=%s parsed_entries=%d raw_entries=%d",
+            "CreationCostDump | path=%s status=%s parsed_entries=%d raw_entries=%d table_entries=%d collisions=%d unresolved=%d",
             self.benefit_norm.creation_cost_path,
             self.benefit_norm.creation_cost_status,
             self.benefit_norm.creation_cost_entries,
             self.benefit_norm.creation_cost_raw_entries,
+            len(getattr(self.benefit_norm, "index_costs_by_key", {})),
+            len(getattr(self.benefit_norm, "creation_cost_collisions", {})),
+            len(getattr(self.benefit_norm, "creation_cost_unresolved", set())),
         )
 
         # State.
@@ -348,6 +356,8 @@ class AdaSelect:
         return normalized
 
     def _creation_cost(self, key: IndexKey) -> float:
+        if hasattr(self.benefit_norm, "creation_cost_for"):
+            return float(self.benefit_norm.creation_cost_for(key[0], tuple(key[1]), DEFAULT_COST))
         return float(self.benefit_norm.index_costs.get(tuple(key[1]), DEFAULT_COST))
 
     def _reset_round_diagnostics(self) -> None:
@@ -382,7 +392,6 @@ class AdaSelect:
         res = self.candidate_generator.generate(
             workload,
             old_conf=set(old_conf or set()),
-            mu_table=self.columns_benefit,
             topk=topk,
         )
         query_indexes = [set(x) for x in (res.query_indexes or [])]
@@ -598,10 +607,8 @@ class AdaSelect:
 
         budget = len(appearing) if self.workload_count == 0 else max(1, int(float(self.ratio) * len(appearing)))
         # LiteSelect order: benefit descending among candidates that appear this round.
-        order = [
-            idx for idx, _ in sorted(self.columns_benefit.items(), key=lambda kv: kv[1], reverse=True)
-            if idx in appearing
-        ]
+        norm_benefit = self._minmax_norm({idx: self.columns_benefit.get(idx, 0.0) for idx in appearing})
+        order = [idx for idx, _ in sorted(norm_benefit.items(), key=lambda kv: (-kv[1], kv[0]))]
         self._last_eval_order = list(order)
         logger.info(
             "BenefitBudget | base_total=%.3f appearing=%d budget=%d eval_order_top=%s",
@@ -646,9 +653,19 @@ class AdaSelect:
             net[key] = float(val) - float(cost)
         self._last_net_benefit_map = dict(net)
         sorted_keys = sorted(net.items(), key=lambda x: x[1], reverse=True)
-        candidate_conf = {key for key, _ in sorted_keys[: self.max_num]}
+        ranked = sorted_keys[: self.max_num]
+        filtered_nonpositive_count = 0
+        if self.workload_count == 0:
+            filtered_nonpositive_count = sum(1 for _, value in ranked if float(value) <= 0.0)
+            candidate_conf = {key for key, value in ranked if float(value) > 0.0}
+        else:
+            candidate_conf = {key for key, _ in ranked}
         self._last_candidate_conf = set(candidate_conf)
-        logger.info("Pre-transition pick | candidate=%s", sorted(candidate_conf))
+        logger.info(
+            "Pre-transition pick | candidate=%s filtered_nonpositive_count=%d",
+            sorted(candidate_conf),
+            filtered_nonpositive_count,
+        )
 
         if self.workload_count == 0:
             selected_conf = set(candidate_conf)
@@ -676,8 +693,23 @@ class AdaSelect:
                     ratio = float("inf")
                 selected_conf = set(candidate_conf) if ratio > self.beta else set(old_canon)
         self._last_final_conf = set(selected_conf)
-        self._last_decision_stats = {"old_benefit": float(old_benefit), "new_benefit": float(new_benefit), "ratio": float(ratio), "beta": float(self.beta)}
-        logger.info("DecisionScore | old=%.4f new=%.4f ratio=%.4f beta=%.4f switched=%d", old_benefit, new_benefit, ratio, self.beta, int(selected_conf != old_canon))
+        self._last_decision_stats = {
+            "old_benefit": float(old_benefit),
+            "new_benefit": float(new_benefit),
+            "ratio": float(ratio),
+            "beta": float(self.beta),
+            "filtered_nonpositive_count": float(filtered_nonpositive_count),
+        }
+        self._m_stats["filtered_nonpositive_count"] = self._m_stats.get("filtered_nonpositive_count", 0) + filtered_nonpositive_count
+        logger.info(
+            "DecisionScore | old=%.4f new=%.4f ratio=%.4f beta=%.4f switched=%d filtered_nonpositive_count=%d",
+            old_benefit,
+            new_benefit,
+            ratio,
+            self.beta,
+            int(selected_conf != old_canon),
+            filtered_nonpositive_count,
+        )
 
         add_set = selected_conf - old_canon
         drop_set = old_canon - selected_conf
