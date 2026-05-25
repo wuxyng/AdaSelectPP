@@ -18,6 +18,7 @@ class QueryEvidence:
     strong_factor_eq: Dict[str, List[str]] = field(default_factory=dict)
     table_order: List[str] = field(default_factory=list)
     has_or: bool = False
+    alias_ambiguous_tables: Set[str] = field(default_factory=set)
     parse_status: str = "fallback_regex"  # ast_ok | fallback_regex | failed
     warnings: List[str] = field(default_factory=list)
 
@@ -33,6 +34,20 @@ class Candidate:
     template_ids: Set[str] = field(default_factory=set)
     support_count: int = 0
     score: float = 0.0
+
+
+@dataclass
+class SeedState:
+    key: IndexKey
+    first_seen_round: int = 0
+    last_seen_round: int = 0
+    seen_rounds: Set[int] = field(default_factory=set)
+    evaluated_count: int = 0
+    positive_count: int = 0
+    benefit: float = 0.0
+    normalized_benefit: float = 0.0
+    last_obs_src: str = ""
+    mature: bool = False
 
 
 @dataclass
