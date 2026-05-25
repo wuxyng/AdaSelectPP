@@ -186,8 +186,13 @@ class AdaSelect:
         self.idx_error_smooth: Dict[IndexKey, float] = {}
         self.idx_abs_error_smooth: Dict[IndexKey, float] = {}
         self.idx_seen_cnt: Dict[IndexKey, int] = {}
+        self.idx_positive_cnt: Dict[IndexKey, int] = {}
+        self.idx_first_seen_round: Dict[IndexKey, int] = {}
+        self.idx_last_seen_round: Dict[IndexKey, int] = {}
+        self.idx_seen_rounds: Dict[IndexKey, Set[int]] = {}
         self.idx_last_err_sign: Dict[IndexKey, int] = {}
         self.idx_sign_smooth: Dict[IndexKey, float] = {}
+        self.idx_last_obs_src: Dict[IndexKey, str] = {}
 
         # Per-round diagnostics expected by main.py / trace recorder.
         self._m_stats: Dict[str, float] = {
@@ -389,16 +394,30 @@ class AdaSelect:
         based: single-column seeds plus bounded width-2 prefix growth.
         """
         topk = max(1, self.max_num * self.candidate_topk_factor + self.candidate_topk_min_extra)
+        seed_norm = self._minmax_norm(self.columns_benefit)
         res = self.candidate_generator.generate(
             workload,
             old_conf=set(old_conf or set()),
             topk=topk,
+            workload_count=self.workload_count,
+            seed_benefit=self.columns_benefit,
+            seed_seen_count=self.idx_seen_cnt,
+            seed_positive_count=self.idx_positive_cnt,
+            seed_last_obs_src=self.idx_last_obs_src,
+            seed_first_seen_round=self.idx_first_seen_round,
+            seed_last_seen_round=self.idx_last_seen_round,
+            seed_seen_rounds=self.idx_seen_rounds,
+            seed_normalized_benefit=seed_norm,
         )
         query_indexes = [set(x) for x in (res.query_indexes or [])]
         appearing = set(res.topk_set or set())
 
         for idx in appearing:
             self.columns_benefit.setdefault(idx, 0.0)
+            if len(idx[1]) == 1:
+                self.idx_first_seen_round.setdefault(idx, self.workload_count)
+                self.idx_last_seen_round[idx] = self.workload_count
+                self.idx_seen_rounds.setdefault(idx, set()).add(self.workload_count)
 
         self._last_wdcg_score_map = dict(res.score_map or {})
         self._last_wdcg_stats = dict(res.stats or {})
@@ -409,12 +428,19 @@ class AdaSelect:
         raw_counts = [len(qs) for qs in query_indexes]
         sample = sorted(appearing)[: self.log_candidate_sample]
         logger.info(
-            "CandidateGen | mode=bounded_prefix raw_union=%d appearing=%d per_query=%s sample=%s families=%s parse_ast_ok=%s parse_regex=%s",
+            "CandidateGen | mode=%s raw_union=%d appearing=%d per_query=%s sample=%s families=%s "
+            "width1=%s width2=%s seed_count=%s eligible_seed_count=%s multi_growth=%s parse_ast_ok=%s parse_regex=%s",
+            self._last_wdcg_stats.get("gen_mode", "unknown"),
             raw_sum,
             len(appearing),
             raw_counts,
             sample,
             {k: self._last_wdcg_stats.get(k, 0) for k in ("family_eq1", "family_join_eq1", "family_range1", "family_eqeq", "family_eqrange", "family_rescue")},
+            self._last_wdcg_stats.get("width1_count", 0),
+            self._last_wdcg_stats.get("width2_count", 0),
+            self._last_wdcg_stats.get("seed_count", 0),
+            self._last_wdcg_stats.get("eligible_seed_count", 0),
+            self._last_wdcg_stats.get("multi_growth_count", 0),
             self._last_wdcg_stats.get("parse_ast_ok", 0),
             self._last_wdcg_stats.get("parse_fallback_regex", 0),
         )
@@ -587,8 +613,11 @@ class AdaSelect:
         self.idx_alphas[idx_key] = lam
         self.idx_alphas_shadow[idx_key] = lam_shadow
         self.idx_seen_cnt[idx_key] = int(self.idx_seen_cnt.get(idx_key, 0)) + 1
+        if len(idx_key[1]) == 1 and delta > 0.0 and obs_src not in ("NO_HIT", "ALL_FALLBACK"):
+            self.idx_positive_cnt[idx_key] = int(self.idx_positive_cnt.get(idx_key, 0)) + 1
         self._last_obs_delta_map[idx_key] = delta
         self._last_obs_src_map[idx_key] = obs_src
+        self.idx_last_obs_src[idx_key] = obs_src
         logger.debug(
             "benefit %s: %.4f -> %.4f delta=%.4f lambda=%.3f shadow=%.3f policy=%s src=%s hit=%d ok=%d fail=%d",
             idx_key, prev, new_benefit, delta, lam, lam_shadow, lam_policy, obs_src, hit_cnt, ok_cnt, fail_cnt,
@@ -739,8 +768,13 @@ class AdaSelect:
         self.idx_error_smooth.clear()
         self.idx_abs_error_smooth.clear()
         self.idx_seen_cnt.clear()
+        self.idx_positive_cnt.clear()
+        self.idx_first_seen_round.clear()
+        self.idx_last_seen_round.clear()
+        self.idx_seen_rounds.clear()
         self.idx_last_err_sign.clear()
         self.idx_sign_smooth.clear()
+        self.idx_last_obs_src.clear()
         self.workload_count = 0
         self.consecutive_timeouts = 0
 

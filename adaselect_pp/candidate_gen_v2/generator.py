@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from adaselect_pp.common import norm_name, unique_keep_order
 from .sql_evidence import StaticSQLExtractor
-from .types import Candidate, GenerationResult, IndexKey, QueryEvidence
+from .types import Candidate, GenerationResult, IndexKey, QueryEvidence, SeedState
 from .vocabulary import ColumnVocabulary
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,7 @@ class MCIGCandidateGenerator:
         self.per_query_cap = int(per_query_cap)
         self.per_table_cap = int(per_table_cap)
         self.round_table_cap = int(round_table_cap)
+        self.probe_rounds = 2
         self.vocab = ColumnVocabulary.load(
             benchmark,
             db_con=db_con,
@@ -155,11 +156,19 @@ class MCIGCandidateGenerator:
         # Deterministic, conservative: filter EQ before join EQ.
         return unique_keep_order((evidence.filter_eq.get(table, []) or []) + (evidence.join_eq.get(table, []) or []))
 
-    def _build_query_candidates(self, evidence: QueryEvidence) -> Dict[IndexKey, Candidate]:
+    def _extract_evidence(self, workload_lines: Sequence[str]) -> Tuple[List[QueryEvidence], Counter]:
+        evidences: List[QueryEvidence] = []
+        parse_status = Counter()
+        for qid, line in enumerate(workload_lines):
+            evidence = self.extractor.extract_line(line, qid)
+            parse_status[evidence.parse_status] += 1
+            evidences.append(evidence)
+        return evidences, parse_status
+
+    def _emit_single_probes(self, evidence: QueryEvidence) -> Dict[IndexKey, Candidate]:
         out: Dict[IndexKey, Candidate] = {}
         source = "AST" if evidence.parse_status == "ast_ok" else "STATIC_FALLBACK"
 
-        # Single-column seeds.
         for table, cols in evidence.filter_eq.items():
             for col in cols:
                 self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(col,), family="EQ1", source=source, roles=("filter_eq",), confidence=0.85)
@@ -169,24 +178,9 @@ class MCIGCandidateGenerator:
         for table, cols in evidence.filter_rng.items():
             for col in cols:
                 self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(col,), family="RANGE1", source=source, roles=("range",), confidence=0.65)
+        return out
 
-        # Strong AST EQ_EQ: only top two filter equality columns in a non-OR factor.
-        if self.max_width >= 2 and evidence.parse_status == "ast_ok" and not evidence.has_or:
-            for table, cols in evidence.strong_factor_eq.items():
-                gcols = unique_keep_order(cols)[:2]
-                if len(gcols) == 2:
-                    self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=gcols, family="EQ_EQ", source="STRONG_AST", roles=("filter_eq", "filter_eq"), confidence=0.95)
-
-        # EQ_RANGE / JOIN_RANGE-style prefix: best equality-like col + best range col.
-        if self.max_width >= 2:
-            for table in sorted(evidence.tables):
-                eq_cols = self._best_eq_cols(evidence, table)
-                rng_cols = unique_keep_order(evidence.filter_rng.get(table, []) or [])
-                if eq_cols and rng_cols and eq_cols[0] != rng_cols[0]:
-                    self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(eq_cols[0], rng_cols[0]), family="EQ_RANGE", source=source, roles=("eq", "range"), confidence=0.80)
-
-        # Candidate-vacuum rescue: if a table has evidence but no viable candidate
-        # after PK/UNIQUE filtering, add one non-fixed single-column fallback.
+    def _add_vacuum_rescue(self, evidence: QueryEvidence, out: Dict[IndexKey, Candidate]) -> None:
         present_tables = {key[0] for key in out}
         for table in sorted(evidence.tables):
             if table in present_tables:
@@ -203,10 +197,10 @@ class MCIGCandidateGenerator:
                 self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(col,), family="VACUUM_RESCUE1", source="VACUUM_RESCUE", roles=("rescue",), confidence=0.50)
                 break
 
-        # Query-local reducer.
+    def _query_reduce(self, out: Dict[IndexKey, Candidate]) -> Dict[IndexKey, Candidate]:
         table_counts: Dict[str, int] = defaultdict(int)
         selected: Dict[IndexKey, Candidate] = {}
-        for key, cand in sorted(out.items(), key=lambda kv: (-self._score(kv[1]), kv[0])):
+        for key, cand in sorted(out.items(), key=lambda kv: (len(kv[0][1]) > 1, -self._score(kv[1]), kv[0])):
             if table_counts[key[0]] >= self.per_table_cap:
                 continue
             selected[key] = cand
@@ -215,6 +209,110 @@ class MCIGCandidateGenerator:
                 break
         return selected
 
+    def _make_seed_states(
+        self,
+        *,
+        seed_benefit: Optional[Dict[IndexKey, float]] = None,
+        seed_seen_count: Optional[Dict[IndexKey, int]] = None,
+        seed_positive_count: Optional[Dict[IndexKey, int]] = None,
+        seed_last_obs_src: Optional[Dict[IndexKey, str]] = None,
+        seed_first_seen_round: Optional[Dict[IndexKey, int]] = None,
+        seed_last_seen_round: Optional[Dict[IndexKey, int]] = None,
+        seed_seen_rounds: Optional[Dict[IndexKey, Set[int]]] = None,
+        seed_normalized_benefit: Optional[Dict[IndexKey, float]] = None,
+    ) -> Dict[IndexKey, SeedState]:
+        keys = set(seed_benefit or {}) | set(seed_seen_count or {}) | set(seed_positive_count or {})
+        out: Dict[IndexKey, SeedState] = {}
+        for key in keys:
+            benefit = float((seed_benefit or {}).get(key, 0.0) or 0.0)
+            seen = int((seed_seen_count or {}).get(key, 0) or 0)
+            positive = int((seed_positive_count or {}).get(key, 0) or 0)
+            last_src = str((seed_last_obs_src or {}).get(key, "") or "")
+            mature = seen > 0 and positive > 0 and benefit > 0.0 and last_src not in {"NO_HIT", "ALL_FALLBACK"}
+            out[key] = SeedState(
+                key=key,
+                first_seen_round=int((seed_first_seen_round or {}).get(key, 0) or 0),
+                last_seen_round=int((seed_last_seen_round or {}).get(key, 0) or 0),
+                seen_rounds=set((seed_seen_rounds or {}).get(key, set()) or set()),
+                evaluated_count=seen,
+                positive_count=positive,
+                benefit=benefit,
+                normalized_benefit=float((seed_normalized_benefit or {}).get(key, 0.0) or 0.0),
+                last_obs_src=last_src,
+                mature=mature,
+            )
+        return out
+
+    def _grow_width2(
+        self,
+        evidence: QueryEvidence,
+        singles: Dict[IndexKey, Candidate],
+        seed_states: Dict[IndexKey, SeedState],
+        rejected: Counter,
+        grow_meta: Dict[IndexKey, Dict[str, object]],
+    ) -> Dict[IndexKey, Candidate]:
+        out: Dict[IndexKey, Candidate] = {}
+        source = "AST" if evidence.parse_status == "ast_ok" else "STATIC_FALLBACK"
+        if evidence.parse_status != "ast_ok":
+            rejected["rejected_growth_parse_fallback"] += 1
+            return out
+        if evidence.has_or:
+            rejected["rejected_growth_has_or"] += 1
+            return out
+        for table in sorted(evidence.tables):
+            if table in evidence.alias_ambiguous_tables:
+                rejected["rejected_growth_alias_ambiguous"] += 1
+                continue
+            eq_cols = self._best_eq_cols(evidence, table)
+            rng_cols = unique_keep_order(evidence.filter_rng.get(table, []) or [])
+            for seed_col in eq_cols:
+                seed_key = (table, (seed_col,))
+                seed_cand = singles.get(seed_key)
+                seed_state = seed_states.get(seed_key)
+                if seed_cand is None:
+                    continue
+                if seed_cand.family == "RANGE1":
+                    rejected["rejected_growth_range_seed"] += 1
+                    continue
+                if seed_state is None or seed_state.evaluated_count <= 0:
+                    rejected["rejected_growth_seed_unseen"] += 1
+                    continue
+                if not seed_state.mature:
+                    rejected["rejected_growth_seed_not_positive"] += 1
+                    continue
+                for col in eq_cols:
+                    if col == seed_col:
+                        continue
+                    key = (table, (seed_col, col))
+                    self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(seed_col, col), family="EQ_EQ", source=source, roles=("seed_eq", "eq"), confidence=0.90)
+                    if key in out:
+                        grow_meta[key] = self._seed_meta(seed_state, "seed_eq_plus_eq")
+                for col in rng_cols:
+                    if col == seed_col:
+                        continue
+                    key = (table, (seed_col, col))
+                    self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(seed_col, col), family="EQ_RANGE", source=source, roles=("seed_eq", "range"), confidence=0.85)
+                    if key in out:
+                        grow_meta[key] = self._seed_meta(seed_state, "seed_eq_plus_range")
+        return out
+
+    @staticmethod
+    def _seed_meta(seed: SeedState, grow_reason: str) -> Dict[str, object]:
+        return {
+            "seed_key": seed.key,
+            "seed_benefit": seed.benefit,
+            "seed_normalized_benefit": seed.normalized_benefit,
+            "seed_evaluated_count": seed.evaluated_count,
+            "seed_positive_count": seed.positive_count,
+            "seed_first_seen_round": seed.first_seen_round,
+            "seed_last_seen_round": seed.last_seen_round,
+            "seed_seen_rounds": sorted(seed.seen_rounds),
+            "seed_last_obs_src": seed.last_obs_src,
+            "seed_mature": seed.mature,
+            "grow_reason": grow_reason,
+            "rejected_growth_reason": "",
+        }
+
     def generate(
         self,
         workload_lines: Sequence[str],
@@ -222,19 +320,43 @@ class MCIGCandidateGenerator:
         old_conf: Optional[Set[IndexKey]] = None,
         mu_table: Optional[Dict[IndexKey, float]] = None,
         topk: int = 40,
+        workload_count: int = 0,
+        seed_benefit: Optional[Dict[IndexKey, float]] = None,
+        seed_seen_count: Optional[Dict[IndexKey, int]] = None,
+        seed_positive_count: Optional[Dict[IndexKey, int]] = None,
+        seed_last_obs_src: Optional[Dict[IndexKey, str]] = None,
+        seed_first_seen_round: Optional[Dict[IndexKey, int]] = None,
+        seed_last_seen_round: Optional[Dict[IndexKey, int]] = None,
+        seed_seen_rounds: Optional[Dict[IndexKey, Set[int]]] = None,
+        seed_normalized_benefit: Optional[Dict[IndexKey, float]] = None,
         **_ignored,
     ) -> GenerationResult:
         start = time.perf_counter()
         per_query: List[Set[IndexKey]] = []
         merged: Dict[IndexKey, Candidate] = {}
-        parse_status = Counter()
         family_raw = Counter()
         source_raw = Counter()
+        rejected = Counter()
+        grow_meta: Dict[IndexKey, Dict[str, object]] = {}
+        evidences, parse_status = self._extract_evidence(workload_lines)
+        seed_states = self._make_seed_states(
+            seed_benefit=seed_benefit or mu_table,
+            seed_seen_count=seed_seen_count,
+            seed_positive_count=seed_positive_count,
+            seed_last_obs_src=seed_last_obs_src,
+            seed_first_seen_round=seed_first_seen_round,
+            seed_last_seen_round=seed_last_seen_round,
+            seed_seen_rounds=seed_seen_rounds,
+            seed_normalized_benefit=seed_normalized_benefit,
+        )
+        gen_mode = "probe" if int(workload_count) < self.probe_rounds else "grow"
 
-        for qid, line in enumerate(workload_lines):
-            evidence = self.extractor.extract_line(line, qid)
-            parse_status[evidence.parse_status] += 1
-            qmap = self._build_query_candidates(evidence)
+        for evidence in evidences:
+            qmap = self._emit_single_probes(evidence)
+            if gen_mode == "grow":
+                qmap.update(self._grow_width2(evidence, qmap, seed_states, rejected, grow_meta))
+            self._add_vacuum_rescue(evidence, qmap)
+            qmap = self._query_reduce(qmap)
             qset = set(qmap)
             per_query.append(qset)
             for key, cand in qmap.items():
@@ -253,6 +375,8 @@ class MCIGCandidateGenerator:
                         existing.source = cand.source
                         existing.roles = cand.roles
                         existing.confidence = max(existing.confidence, cand.confidence)
+                    if key in grow_meta:
+                        grow_meta[key]["support_query_ids"] = sorted(existing.query_ids)
 
         for cand in merged.values():
             cand.score = self._score(cand)
@@ -260,7 +384,7 @@ class MCIGCandidateGenerator:
         table_counts: Dict[str, int] = defaultdict(int)
         selected: List[Candidate] = []
         limit = max(1, int(topk))
-        for cand in sorted(merged.values(), key=lambda c: (-c.score, c.key)):
+        for cand in sorted(merged.values(), key=lambda c: (len(c.key[1]) > 1, -c.score, c.key)):
             if len(selected) >= limit:
                 break
             if table_counts[cand.key[0]] >= self.round_table_cap:
@@ -282,11 +406,16 @@ class MCIGCandidateGenerator:
                 "width_before_merge": len(key[1]),
                 "width_after_merge": len(key[1]),
             }
+            if len(key[1]) == 2:
+                meta_map[key].update(grow_meta.get(key, {"rejected_growth_reason": "missing_seed_provenance"}))
         self.last_meta = dict(meta_map)
 
         aff = [sum(1 for qset in per_query if key in qset) for key in topk_set]
         stats = {
             "candidate_count_raw": len(merged),
+            "gen_mode": gen_mode,
+            "probe_rounds": self.probe_rounds,
+            "workload_count": int(workload_count),
             "wdcg_pruned_count": len(topk_set),
             "wdcg_selected_post_compile": len(topk_set),
             "merged_total": 0,
@@ -307,6 +436,17 @@ class MCIGCandidateGenerator:
             "family_eqeq": int(family_raw.get("EQ_EQ", 0)),
             "family_eqrange": int(family_raw.get("EQ_RANGE", 0)),
             "family_rescue": int(family_raw.get("VACUUM_RESCUE1", 0)),
+            "width1_count": sum(1 for k in merged if len(k[1]) == 1),
+            "width2_count": sum(1 for k in merged if len(k[1]) == 2),
+            "seed_count": sum(1 for s in seed_states.values() if len(s.key[1]) == 1),
+            "eligible_seed_count": sum(1 for s in seed_states.values() if len(s.key[1]) == 1 and s.mature),
+            "multi_growth_count": sum(1 for k in merged if len(k[1]) == 2),
+            "rejected_growth_has_or": int(rejected.get("rejected_growth_has_or", 0)),
+            "rejected_growth_alias_ambiguous": int(rejected.get("rejected_growth_alias_ambiguous", 0)),
+            "rejected_growth_seed_not_positive": int(rejected.get("rejected_growth_seed_not_positive", 0)),
+            "rejected_growth_seed_unseen": int(rejected.get("rejected_growth_seed_unseen", 0)),
+            "rejected_growth_range_seed": int(rejected.get("rejected_growth_range_seed", 0)),
+            "rejected_growth_parse_fallback": int(rejected.get("rejected_growth_parse_fallback", 0)),
             "source_ast": int(source_raw.get("AST", 0)),
             "source_strong_ast": int(source_raw.get("STRONG_AST", 0)),
             "source_static_fallback": int(source_raw.get("STATIC_FALLBACK", 0)),
