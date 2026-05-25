@@ -200,7 +200,7 @@ class MCIGCandidateGenerator:
     def _query_reduce(self, out: Dict[IndexKey, Candidate]) -> Dict[IndexKey, Candidate]:
         table_counts: Dict[str, int] = defaultdict(int)
         selected: Dict[IndexKey, Candidate] = {}
-        for key, cand in sorted(out.items(), key=lambda kv: (-self._score(kv[1]), kv[0])):
+        for key, cand in sorted(out.items(), key=lambda kv: (len(kv[0][1]) > 1, -self._score(kv[1]), kv[0])):
             if table_counts[key[0]] >= self.per_table_cap:
                 continue
             selected[key] = cand
@@ -253,6 +253,9 @@ class MCIGCandidateGenerator:
     ) -> Dict[IndexKey, Candidate]:
         out: Dict[IndexKey, Candidate] = {}
         source = "AST" if evidence.parse_status == "ast_ok" else "STATIC_FALLBACK"
+        if evidence.parse_status != "ast_ok":
+            rejected["rejected_growth_parse_fallback"] += 1
+            return out
         if evidence.has_or:
             rejected["rejected_growth_has_or"] += 1
             return out
@@ -381,7 +384,7 @@ class MCIGCandidateGenerator:
         table_counts: Dict[str, int] = defaultdict(int)
         selected: List[Candidate] = []
         limit = max(1, int(topk))
-        for cand in sorted(merged.values(), key=lambda c: (-c.score, c.key)):
+        for cand in sorted(merged.values(), key=lambda c: (len(c.key[1]) > 1, -c.score, c.key)):
             if len(selected) >= limit:
                 break
             if table_counts[cand.key[0]] >= self.round_table_cap:
@@ -443,6 +446,7 @@ class MCIGCandidateGenerator:
             "rejected_growth_seed_not_positive": int(rejected.get("rejected_growth_seed_not_positive", 0)),
             "rejected_growth_seed_unseen": int(rejected.get("rejected_growth_seed_unseen", 0)),
             "rejected_growth_range_seed": int(rejected.get("rejected_growth_range_seed", 0)),
+            "rejected_growth_parse_fallback": int(rejected.get("rejected_growth_parse_fallback", 0)),
             "source_ast": int(source_raw.get("AST", 0)),
             "source_strong_ast": int(source_raw.get("STRONG_AST", 0)),
             "source_static_fallback": int(source_raw.get("STATIC_FALLBACK", 0)),

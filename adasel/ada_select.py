@@ -428,12 +428,19 @@ class AdaSelect:
         raw_counts = [len(qs) for qs in query_indexes]
         sample = sorted(appearing)[: self.log_candidate_sample]
         logger.info(
-            "CandidateGen | mode=bounded_prefix raw_union=%d appearing=%d per_query=%s sample=%s families=%s parse_ast_ok=%s parse_regex=%s",
+            "CandidateGen | mode=%s raw_union=%d appearing=%d per_query=%s sample=%s families=%s "
+            "width1=%s width2=%s seed_count=%s eligible_seed_count=%s multi_growth=%s parse_ast_ok=%s parse_regex=%s",
+            self._last_wdcg_stats.get("gen_mode", "unknown"),
             raw_sum,
             len(appearing),
             raw_counts,
             sample,
             {k: self._last_wdcg_stats.get(k, 0) for k in ("family_eq1", "family_join_eq1", "family_range1", "family_eqeq", "family_eqrange", "family_rescue")},
+            self._last_wdcg_stats.get("width1_count", 0),
+            self._last_wdcg_stats.get("width2_count", 0),
+            self._last_wdcg_stats.get("seed_count", 0),
+            self._last_wdcg_stats.get("eligible_seed_count", 0),
+            self._last_wdcg_stats.get("multi_growth_count", 0),
             self._last_wdcg_stats.get("parse_ast_ok", 0),
             self._last_wdcg_stats.get("parse_fallback_regex", 0),
         )
