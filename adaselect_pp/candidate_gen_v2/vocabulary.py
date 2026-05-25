@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Set
+from typing import Dict, Optional, Sequence, Set
 
 from adaselect_pp.common import norm_name
+
+logger = logging.getLogger(__name__)
 
 
 class ColumnVocabulary:
@@ -15,13 +18,23 @@ class ColumnVocabulary:
     and 'table(c1,c2)'.  Schema validation is used to disambiguate order.
     """
 
-    def __init__(self, mapping: Optional[Dict[str, Set[str]]] = None) -> None:
+    def __init__(
+        self,
+        mapping: Optional[Dict[str, Set[str]]] = None,
+        *,
+        path: Optional[Path] = None,
+        candidate_paths: Sequence[Path] = (),
+        status: str = "not_loaded",
+    ) -> None:
         self.mapping: Dict[str, Set[str]] = {
             norm_name(t): {norm_name(c) for c in cols if norm_name(c)}
             for t, cols in (mapping or {}).items()
             if norm_name(t)
         }
         self.enabled = bool(self.mapping)
+        self.path = str(path) if path is not None else ""
+        self.candidate_paths = [str(p) for p in candidate_paths]
+        self.status = status
 
     def is_allowed(self, table: str, column: str) -> bool:
         if not self.enabled:
@@ -34,7 +47,14 @@ class ColumnVocabulary:
         return set(self.mapping.get(norm_name(table), set()))
 
     @classmethod
-    def load(cls, benchmark: str, db_con=None, explicit_path: str = "") -> "ColumnVocabulary":
+    def load(
+        cls,
+        benchmark: str,
+        db_con=None,
+        explicit_path: str = "",
+        *,
+        required: bool = False,
+    ) -> "ColumnVocabulary":
         candidates = []
         if explicit_path:
             candidates.append(Path(explicit_path))
@@ -46,7 +66,14 @@ class ColumnVocabulary:
         ])
         path = next((p for p in candidates if p.exists()), None)
         if path is None:
-            return cls()
+            msg = (
+                f"indexable-column whitelist not found for benchmark={benchmark!r}; "
+                f"checked={[str(p) for p in candidates]}"
+            )
+            if required:
+                raise FileNotFoundError(msg)
+            logger.warning(msg)
+            return cls(candidate_paths=candidates, status="missing")
 
         schema: Dict[str, Set[str]] = {}
         if db_con is not None:
@@ -104,6 +131,19 @@ class ColumnVocabulary:
                 # Some legacy files use '<column> <table>', others '<table> <column>'.
                 add_pair(toks[0], toks[1])
 
-        # Fail open if the file format was not understood; never enable an empty
-        # or invalid whitelist that would prune every candidate.
-        return cls(mapping)
+        vocab = cls(mapping, path=path, candidate_paths=candidates, status="loaded" if mapping else "empty")
+        if not vocab.enabled:
+            msg = f"indexable-column whitelist parsed empty for benchmark={benchmark!r}: {path}"
+            if required:
+                raise ValueError(msg)
+            logger.warning(msg)
+        logger.info(
+            "Whitelist loaded | benchmark=%s path=%s enabled=%s tables=%d columns=%d status=%s",
+            benchmark,
+            vocab.path,
+            vocab.enabled,
+            len(vocab.mapping),
+            sum(len(cols) for cols in vocab.mapping.values()),
+            vocab.status,
+        )
+        return vocab

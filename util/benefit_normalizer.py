@@ -11,7 +11,7 @@ import ast
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Set, Tuple
+from typing import Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -22,18 +22,27 @@ class BenefitNormalizer:
     def __init__(self, alpha: float = 0.2):
 
         self.index_costs: Dict[Tuple[str, ...], float] = {}
+        self.creation_cost_path: str = ""
+        self.creation_cost_status: str = "not_loaded"
+        self.creation_cost_entries: int = 0
+        self.creation_cost_raw_entries: int = 0
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def load_creation_costs(self, benchmark: str) -> None:
+    def load_creation_costs(self, benchmark: str, *, required: bool = False) -> None:
         """
         Read txt/{benchmark}_op_3_create_time.txt and normalize creation costs by column tuples.
         """
         fname = f"txt/{benchmark}_op_3_create_time.txt"
         path = Path(fname)
+        self.creation_cost_path = str(path)
         if not path.exists():
-            logger.warning("Creation-cost file not found: %s", path)
+            self.creation_cost_status = "missing"
+            msg = f"Creation-cost file not found for benchmark={benchmark!r}: {path}"
+            if required:
+                raise FileNotFoundError(msg)
+            logger.warning(msg)
             return
 
         raw: Dict[Tuple[str, ...], float] = {}
@@ -55,14 +64,28 @@ class BenefitNormalizer:
                 raw[cols] = time_val
 
         if not raw:
-            logger.warning("No creation-cost records parsed from %s", path)
+            self.creation_cost_status = "empty"
+            msg = f"No creation-cost records parsed from {path}"
+            if required:
+                raise ValueError(msg)
+            logger.warning(msg)
             return
 
         # Normalize via existing minmax_scale (keys are column tuples)
         normalized = self.minmax_scale(raw, len(raw))
         self.index_costs.update(normalized)
+        self.creation_cost_raw_entries = len(raw)
+        self.creation_cost_entries = len(normalized)
+        self.creation_cost_status = "loaded"
 
-        logger.info("Loaded %d creation-cost entries from %s", len(normalized), path)
+        logger.info(
+            "Creation costs loaded | benchmark=%s path=%s raw_entries=%d parsed_entries=%d status=%s",
+            benchmark,
+            path,
+            self.creation_cost_raw_entries,
+            self.creation_cost_entries,
+            self.creation_cost_status,
+        )
 
 
     @staticmethod

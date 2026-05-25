@@ -51,16 +51,36 @@ class MCIGCandidateGenerator:
         self.benchmark = benchmark
         self.db = db_con
         self.max_width = int(max_width)
+        if self.max_width > 2:
+            raise ValueError("Phase 0.5 AdaSelect-PG supports max_width <= 2 only")
         self.max_num = int(max_num)
         self.per_query_cap = int(per_query_cap)
         self.per_table_cap = int(per_table_cap)
         self.round_table_cap = int(round_table_cap)
-        self.vocab = ColumnVocabulary.load(benchmark, db_con=db_con, explicit_path=indexable_path or "")
+        self.vocab = ColumnVocabulary.load(
+            benchmark,
+            db_con=db_con,
+            explicit_path=indexable_path or "",
+            required=True,
+        )
         self.extractor = StaticSQLExtractor(db_con, self.vocab)
         self.pkuniq = self._load_pkuniq()
         self.last_meta: Dict[IndexKey, Dict[str, object]] = {}
         # TraceRecorder compatibility: old code expects generator.enum.last_meta.
         self.enum = self
+        logger.info(
+            "CandidateGenerator init | class=%s benchmark=%s max_width=%d max_num=%d sqlglot_available=%s "
+            "whitelist_path=%s whitelist_enabled=%s whitelist_tables=%d whitelist_columns=%d",
+            self.__class__.__name__,
+            self.benchmark,
+            self.max_width,
+            self.max_num,
+            self.extractor.sqlglot_available,
+            self.vocab.path,
+            self.vocab.enabled,
+            len(self.vocab.mapping),
+            sum(len(cols) for cols in self.vocab.mapping.values()),
+        )
 
     def _load_pkuniq(self) -> Set[IndexKey]:
         out: Set[IndexKey] = set()
@@ -294,8 +314,10 @@ class MCIGCandidateGenerator:
             "source_static_fallback": int(source_raw.get("STATIC_FALLBACK", 0)),
             "source_vacuum_rescue": int(source_raw.get("VACUUM_RESCUE", 0)),
             "vocab_enabled": int(self.vocab.enabled),
+            "vocab_path": self.vocab.path,
             "vocab_tables": len(self.vocab.mapping),
             "vocab_columns": sum(len(cols) for cols in self.vocab.mapping.values()),
+            "sqlglot_available": int(self.extractor.sqlglot_available),
             "wdcg_elapsed_ms": (time.perf_counter() - start) * 1000.0,
         }
         if aff:
