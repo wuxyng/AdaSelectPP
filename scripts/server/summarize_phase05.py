@@ -88,6 +88,14 @@ def _is_metrics_csv(path: Path) -> bool:
         return False
 
 
+def _under_preexisting_archive(path: Path, run_dir: Path) -> bool:
+    try:
+        rel = path.relative_to(run_dir)
+    except ValueError:
+        return False
+    return "_preexisting_log_archive" in rel.parts
+
+
 def _case_name(path: Path, run_dir: Path) -> str:
     try:
         rel = path.relative_to(run_dir)
@@ -171,7 +179,10 @@ def main(argv: Sequence[str]) -> int:
         print(f"Run directory not found: {run_dir}", file=sys.stderr)
         return 1
 
-    csv_paths = sorted(p for p in run_dir.rglob("*.csv") if _is_metrics_csv(p))
+    csv_paths = sorted(
+        p for p in run_dir.rglob("*.csv")
+        if not _under_preexisting_archive(p, run_dir) and _is_metrics_csv(p)
+    )
     out = run_dir / "summary.md"
     lines = [
         "# Phase 0.5 First-Pass Summary",

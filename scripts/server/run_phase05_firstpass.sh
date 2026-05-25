@@ -43,12 +43,55 @@ copy_case_outputs() {
   local bench="$1"
   local wtype="$2"
   local case_dir="$3"
-  local started_epoch="$4"
   mkdir -p "$case_dir"
   if [[ -d log ]]; then
     while IFS= read -r -d '' f; do
       cp -p "$f" "$case_dir/"
-    done < <(find log -maxdepth 1 -type f -name "adaselect_${bench}_${wtype}_*" -newermt "@${started_epoch}" -print0 2>/dev/null)
+    done < <(find log -maxdepth 1 -type f -name "adaselect_${bench}_${wtype}_*" -print0 2>/dev/null)
+  fi
+}
+
+archive_existing_case_outputs() {
+  local bench="$1"
+  local wtype="$2"
+  local archive_dir="$RUN_DIR/_preexisting_log_archive/${bench}_${wtype}"
+  local files=()
+
+  if [[ ! -d log ]]; then
+    return 0
+  fi
+
+  shopt -s nullglob
+  files=(log/adaselect_"${bench}"_"${wtype}"_*)
+  shopt -u nullglob
+
+  if (( ${#files[@]} == 0 )); then
+    return 0
+  fi
+
+  mkdir -p "$archive_dir"
+  printf 'Archiving %d preexisting log artifact(s) for %s_%s into %s\n' \
+    "${#files[@]}" "$bench" "$wtype" "$archive_dir"
+  mv -- "${files[@]}" "$archive_dir/"
+}
+
+verify_case_outputs() {
+  local case_dir="$1"
+  local label="$2"
+  local metrics_count trace_count log_count
+
+  metrics_count="$(find "$case_dir" -maxdepth 1 -type f -name '*.csv' ! -name '*.trace.csv' | wc -l | tr -d '[:space:]')"
+  trace_count="$(find "$case_dir" -maxdepth 1 -type f -name '*.trace.csv' | wc -l | tr -d '[:space:]')"
+  log_count="$(find "$case_dir" -maxdepth 1 -type f -name '*.log' | wc -l | tr -d '[:space:]')"
+
+  if (( metrics_count < 1 || trace_count < 1 || log_count < 1 )); then
+    echo "Missing expected artifacts for case $label in $case_dir" >&2
+    echo "  metrics CSV (*.csv excluding *.trace.csv): $metrics_count" >&2
+    echo "  trace CSV (*.trace.csv): $trace_count" >&2
+    echo "  log file (*.log): $log_count" >&2
+    echo "Collected files:" >&2
+    find "$case_dir" -maxdepth 1 -type f -printf '  %f\n' >&2 2>/dev/null || true
+    exit 1
   fi
 }
 
@@ -58,8 +101,6 @@ run_case() {
   local round_size="$3"
   local label="${bench}_${wtype}"
   local case_dir="$RUN_DIR/$label"
-  local started_epoch
-  started_epoch="$(date +%s)"
   mkdir -p "$case_dir"
 
   echo "== Running $label round_size=$round_size =="
@@ -67,14 +108,17 @@ run_case() {
     echo "python3 adasel/main.py adaselect $bench $wtype $round_size all optimizer --trace"
   } > "$case_dir/command.txt"
 
+  archive_existing_case_outputs "$bench" "$wtype"
+
   if ! python3 adasel/main.py adaselect "$bench" "$wtype" "$round_size" all optimizer --trace \
       > "$case_dir/stdout.log" 2> "$case_dir/stderr.log"; then
-    copy_case_outputs "$bench" "$wtype" "$case_dir" "$started_epoch"
+    copy_case_outputs "$bench" "$wtype" "$case_dir"
     echo "Case failed: $label; see $case_dir/stdout.log and $case_dir/stderr.log" >&2
     exit 1
   fi
 
-  copy_case_outputs "$bench" "$wtype" "$case_dir" "$started_epoch"
+  copy_case_outputs "$bench" "$wtype" "$case_dir"
+  verify_case_outputs "$case_dir" "$label"
 }
 
 run_case tpchs noisy 5
