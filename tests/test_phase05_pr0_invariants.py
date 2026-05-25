@@ -26,6 +26,11 @@ class FakeDB:
         return []
 
 
+class BrokenSchemaDB(FakeDB):
+    def get_columns(self, table):
+        raise RuntimeError(f"no columns for {table}")
+
+
 def test_adaselect_config_default_max_width_is_two():
     cfg = json.loads(Path("adasel/config/adaselect.json").read_text(encoding="utf-8"))
     assert cfg["max_width"] == 2
@@ -55,6 +60,24 @@ def test_whitelist_required_missing_and_empty_fail_fast(tmp_path):
     empty.write_text("# no columns\n", encoding="utf-8")
     with pytest.raises(ValueError, match="parsed empty"):
         ColumnVocabulary.load("fake", db_con=FakeDB(), explicit_path=str(empty), required=True)
+
+
+def test_whitelist_required_fails_when_schema_metadata_unavailable(tmp_path):
+    whitelist = tmp_path / "fake_indexable_columns.txt"
+    whitelist.write_text("a t\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="schema metadata unavailable"):
+        ColumnVocabulary.load("fake", db_con=BrokenSchemaDB(), explicit_path=str(whitelist), required=True)
+
+
+def test_whitelist_explicit_path_is_override_not_fallback(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "txt").mkdir()
+    (tmp_path / "txt" / "fake_indexable_columns.txt").write_text("t a\n", encoding="utf-8")
+    missing_explicit = tmp_path / "typo_indexable_columns.txt"
+
+    with pytest.raises(FileNotFoundError):
+        ColumnVocabulary.load("fake", db_con=FakeDB(), explicit_path=str(missing_explicit), required=True)
 
 
 def test_whitelist_load_records_path_and_counts(tmp_path):

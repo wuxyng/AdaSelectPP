@@ -58,12 +58,13 @@ class ColumnVocabulary:
         candidates = []
         if explicit_path:
             candidates.append(Path(explicit_path))
-        bench = norm_name(benchmark)
-        candidates.extend([
-            Path("txt") / f"{bench}_indexable_columns.txt",
-            Path("database") / "txt" / f"{bench}_indexable_columns.txt",
-            Path(f"{bench}_indexable_columns.txt"),
-        ])
+        else:
+            bench = norm_name(benchmark)
+            candidates.extend([
+                Path("txt") / f"{bench}_indexable_columns.txt",
+                Path("database") / "txt" / f"{bench}_indexable_columns.txt",
+                Path(f"{bench}_indexable_columns.txt"),
+            ])
         path = next((p for p in candidates if p.exists()), None)
         if path is None:
             msg = (
@@ -76,13 +77,27 @@ class ColumnVocabulary:
             return cls(candidate_paths=candidates, status="missing")
 
         schema: Dict[str, Set[str]] = {}
+        schema_error = False
         if db_con is not None:
             try:
                 for t in db_con.get_tables():
                     tt = norm_name(t)
                     schema[tt] = {norm_name(c) for c in db_con.get_columns(t)}
             except Exception:
+                schema_error = True
                 schema = {}
+            schema_unavailable = not schema or all(not cols for cols in schema.values())
+            if required and (schema_error or schema_unavailable):
+                raise RuntimeError(
+                    "schema metadata unavailable while loading required indexable-column whitelist "
+                    f"for benchmark={benchmark!r}: {path}"
+                )
+            if schema_error or schema_unavailable:
+                logger.warning(
+                    "Schema metadata unavailable while loading indexable-column whitelist | benchmark=%s path=%s",
+                    benchmark,
+                    path,
+                )
 
         mapping: Dict[str, Set[str]] = {}
 
