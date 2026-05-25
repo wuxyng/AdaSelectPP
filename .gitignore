@@ -22,6 +22,8 @@ log/
 logs/
 results/
 downloads/
+runs/
+artifacts/
 tcnn/net/
 
 # Generated analysis artifacts; keep analysis source files tracked.
