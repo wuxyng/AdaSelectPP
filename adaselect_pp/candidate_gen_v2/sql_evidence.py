@@ -72,6 +72,7 @@ class StaticSQLExtractor:
         ev = QueryEvidence(query_id=query_id, template_id=str(template_id), sql=sql, parse_status="ast_ok")
 
         alias_to_table: Dict[str, str] = {}
+        table_aliases: Dict[str, Set[str]] = defaultdict(set)
         table_order: List[str] = []
         for tbl in tree.find_all(exp.Table):
             name = norm_name(tbl.name)
@@ -80,11 +81,13 @@ class StaticSQLExtractor:
             alias = norm_name(tbl.alias_or_name) if tbl.alias_or_name else name
             alias_to_table[alias] = name
             alias_to_table[name] = name
+            table_aliases[name].add(alias)
             if name not in table_order:
                 table_order.append(name)
         ev.tables = set(table_order)
         ev.table_order = list(table_order)
         ev.has_or = any(True for _ in tree.find_all(exp.Or))
+        ev.alias_ambiguous_tables = {t for t, aliases in table_aliases.items() if len(aliases) > 1}
 
         def add(mp: Dict[str, List[str]], table: str, col: str) -> None:
             t = norm_name(table)
@@ -152,7 +155,8 @@ class StaticSQLExtractor:
                 add(ev.filter_rng, *col)
         for pred in tree.find_all(exp.Like):
             col = resolve_col(pred.args.get("this"))
-            if col:
+            pattern = pred.args.get("expression")
+            if col and self._is_prefix_like_literal(pattern):
                 add(ev.filter_rng, *col)
 
         # Strong equality groups: only non-OR top-level AND factors with filter EQ/IN.
@@ -187,6 +191,16 @@ class StaticSQLExtractor:
                 if not mp[t]:
                     del mp[t]
         return ev
+
+    def _is_prefix_like_literal(self, node) -> bool:
+        exp = self._exp
+        if node is None or not isinstance(node, exp.Literal):
+            return False
+        try:
+            pattern = str(node.this)
+        except Exception:
+            return False
+        return bool(pattern.endswith("%") and not pattern.startswith(("%", "_")))
 
     def _split_and_factors(self, expr) -> List[List[object]]:
         exp = self._exp
@@ -227,7 +241,11 @@ class StaticSQLExtractor:
                     continue
                 if re.search(r"\b" + re.escape(c) + r"\s*=\s*", q):
                     add(ev.filter_eq, t, c)
-                elif re.search(r"\b" + re.escape(c) + r"\s*(<=|>=|<|>)", q) or re.search(r"\b" + re.escape(c) + r"\s+between\b", q):
+                elif (
+                    re.search(r"\b" + re.escape(c) + r"\s*(<=|>=|<|>)", q)
+                    or re.search(r"\b" + re.escape(c) + r"\s+between\b", q)
+                    or re.search(r"\b" + re.escape(c) + r"\s+like\s+'[^%_'][^']*%'", q)
+                ):
                     add(ev.filter_rng, t, c)
                 else:
                     add(ev.join_eq, t, c)
