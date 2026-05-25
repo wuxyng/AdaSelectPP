@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from adaselect_pp.common import sql_only
@@ -87,7 +88,7 @@ class AdaSelect:
         self.timeout = 30_000
         self.transition_mode = "symmetric"
         self.min_width = 1
-        self.max_width = 3
+        self.max_width = 2
         self.rsfe_decay = 0.90
         self.lambda_policy = "adaptive"
         self.benefit_decay = None
@@ -111,7 +112,14 @@ class AdaSelect:
         self.candidate_per_table_cap = 4
         self.candidate_round_table_cap = 6
         self.indexable_columns_path = ""
+        self._cfg_effective: Dict[str, Any] = {}
         self._load_cfg(cfg_source if cfg_source is not None else cfg_path)
+        if self.max_width > 2:
+            raise ValueError("Phase 0.5 AdaSelect-PG supports max_width <= 2 only")
+        if not self.wdcg_enabled:
+            raise ValueError(
+                "wdcg_enabled=false is not supported: Phase 0.5 has only the MCIGCandidateGenerator active path"
+            )
 
         logger.info(
             "cfg: K=%d α=%.2f β=%.2f ratio=%.2f timeout=%d mode=%s min_w=%d max_w=%d",
@@ -124,6 +132,8 @@ class AdaSelect:
             self.min_width,
             self.max_width,
         )
+        logger.info("GitInfo | %s", self._git_info())
+        logger.info("ConfigDump | %s", json.dumps(self._cfg_effective, sort_keys=True))
 
         # Schema + bounded prefix-growth candidate generator.
         self.tables = [str(t).lower() for t in self.db_con1.get_tables()]
@@ -144,9 +154,17 @@ class AdaSelect:
         # Creation cost model.
         self.benefit_norm = BenefitNormalizer()
         try:
-            self.benefit_norm.load_creation_costs(benchmark)
+            self.benefit_norm.load_creation_costs(benchmark, required=True)
         except Exception as exc:
-            logger.warning("creation-cost load failed for benchmark=%s: %s", benchmark, exc)
+            logger.error("creation-cost load failed for benchmark=%s: %s", benchmark, exc)
+            raise
+        logger.info(
+            "CreationCostDump | path=%s status=%s parsed_entries=%d raw_entries=%d",
+            self.benefit_norm.creation_cost_path,
+            self.benefit_norm.creation_cost_status,
+            self.benefit_norm.creation_cost_entries,
+            self.benefit_norm.creation_cost_raw_entries,
+        )
 
         # State.
         self.columns_benefit: Dict[IndexKey, float] = {}
@@ -231,6 +249,58 @@ class AdaSelect:
         self.candidate_per_table_cap = int(cfg.get("candidate_per_table_cap", self.candidate_per_table_cap))
         self.candidate_round_table_cap = int(cfg.get("candidate_round_table_cap", self.candidate_round_table_cap))
         self.indexable_columns_path = str(cfg.get("indexable_columns_path", cfg.get("g0_indexable_columns_path", self.indexable_columns_path)) or "")
+        self._cfg_effective = {
+            "max_num": self.max_num,
+            "alpha": self.alpha_init,
+            "beta": self.beta,
+            "optimizer_ratio": self.ratio,
+            "timeout": self.timeout,
+            "min_width": self.min_width,
+            "max_width": self.max_width,
+            "transition_mode": self.transition_mode,
+            "rsfe_decay": self.rsfe_decay,
+            "lambda_policy": self.lambda_policy,
+            "wdcg_enabled": self.wdcg_enabled,
+            "benefit_decay_fixed": self.benefit_decay_fixed,
+            "candidate_topk_factor": self.candidate_topk_factor,
+            "candidate_topk_min_extra": self.candidate_topk_min_extra,
+            "candidate_per_query_cap": self.candidate_per_query_cap,
+            "candidate_per_table_cap": self.candidate_per_table_cap,
+            "candidate_round_table_cap": self.candidate_round_table_cap,
+            "indexable_columns_path": self.indexable_columns_path,
+            "log_candidate_sample": self.log_candidate_sample,
+            "fixed_lambda": self.fixed_lambda,
+            "benefit_decay": self.benefit_decay,
+            "beta_error": self.beta_error,
+            "lambda_min": self.lambda_min,
+            "lambda_max": self.lambda_max,
+            "ts_low": self.ts_low,
+            "ts_high": self.ts_high,
+            "ts_gate_regress": self.ts_gate_regress,
+            "ts_mad_floor_rel": self.ts_mad_floor_rel,
+            "ts_sign_decay": self.ts_sign_decay,
+        }
+
+    @staticmethod
+    def _git_info() -> Dict[str, Any]:
+        def run_git(args: Sequence[str]) -> str:
+            try:
+                proc = subprocess.run(
+                    ["git", *args],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                return proc.stdout.strip() if proc.returncode == 0 else ""
+            except Exception:
+                return ""
+
+        return {
+            "branch": run_git(["rev-parse", "--abbrev-ref", "HEAD"]) or "unknown",
+            "sha": run_git(["rev-parse", "--short", "HEAD"]) or "unknown",
+            "dirty": bool(run_git(["status", "--short"])),
+        }
 
     def _cache_indexes(self) -> None:
         """Cache existing PRIMARY KEY / UNIQUE indexes to avoid re-creating them."""
