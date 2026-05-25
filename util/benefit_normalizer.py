@@ -10,8 +10,11 @@ and skips malformed rows gracefully.
 import ast
 import json
 import logging
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Set, Tuple
+
+from adaselect_pp.common import norm_name
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,9 @@ class BenefitNormalizer:
     def __init__(self, alpha: float = 0.2):
 
         self.index_costs: Dict[Tuple[str, ...], float] = {}
+        self.index_costs_by_key: Dict[Tuple[str, Tuple[str, ...]], float] = {}
+        self.creation_cost_collisions: Dict[Tuple[str, ...], Set[str]] = {}
+        self.creation_cost_unresolved: Set[Tuple[str, ...]] = set()
         self.creation_cost_path: str = ""
         self.creation_cost_status: str = "not_loaded"
         self.creation_cost_entries: int = 0
@@ -30,7 +36,7 @@ class BenefitNormalizer:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def load_creation_costs(self, benchmark: str, *, required: bool = False) -> None:
+    def load_creation_costs(self, benchmark: str, *, required: bool = False, db_con=None, vocabulary=None) -> None:
         """
         Read txt/{benchmark}_op_3_create_time.txt and normalize creation costs by column tuples.
         """
@@ -56,12 +62,14 @@ class BenefitNormalizer:
                     time_val = float(time_str)
                     # parse raw column tuple or single column
                     cols = tuple(ast.literal_eval(name_str)) if name_str.startswith(('(', '[')) else (name_str,)
+                    cols = tuple(norm_name(c) for c in cols if norm_name(c))
                 except Exception as e:
                     logger.debug("Skip bad line in %s: %s – %s", path, line, e)
                     continue
 
                 # use raw column tuple as key
-                raw[cols] = time_val
+                if cols:
+                    raw[cols] = time_val
 
         if not raw:
             self.creation_cost_status = "empty"
@@ -74,6 +82,7 @@ class BenefitNormalizer:
         # Normalize via existing minmax_scale (keys are column tuples)
         normalized = self.minmax_scale(raw, len(raw))
         self.index_costs.update(normalized)
+        self._load_table_aware_costs(normalized, db_con=db_con, vocabulary=vocabulary)
         self.creation_cost_raw_entries = len(raw)
         self.creation_cost_entries = len(normalized)
         self.creation_cost_status = "loaded"
@@ -86,6 +95,61 @@ class BenefitNormalizer:
             self.creation_cost_entries,
             self.creation_cost_status,
         )
+        if self.creation_cost_collisions:
+            logger.warning(
+                "Creation-cost tuple collisions detected | benchmark=%s count=%d sample=%s",
+                benchmark,
+                len(self.creation_cost_collisions),
+                list(self.creation_cost_collisions.items())[:5],
+            )
+        if self.creation_cost_unresolved:
+            logger.warning(
+                "Creation-cost tuples unresolved to a table | benchmark=%s count=%d sample=%s",
+                benchmark,
+                len(self.creation_cost_unresolved),
+                sorted(self.creation_cost_unresolved)[:5],
+            )
+
+    def _load_table_aware_costs(self, normalized: Dict[Tuple[str, ...], float], *, db_con=None, vocabulary=None) -> None:
+        col_to_tables: Dict[str, Set[str]] = defaultdict(set)
+        if vocabulary is not None and getattr(vocabulary, "enabled", False):
+            for table, cols in getattr(vocabulary, "mapping", {}).items():
+                for col in cols:
+                    col_to_tables[norm_name(col)].add(norm_name(table))
+        if db_con is not None:
+            try:
+                for table in db_con.get_tables():
+                    t = norm_name(table)
+                    for col in db_con.get_columns(table):
+                        col_to_tables[norm_name(col)].add(t)
+            except Exception as exc:
+                logger.warning("Creation-cost table map unavailable from schema: %s", exc)
+
+        if not col_to_tables:
+            return
+
+        for cols, cost in normalized.items():
+            possible: Optional[Set[str]] = None
+            for col in cols:
+                tables = set(col_to_tables.get(norm_name(col), set()))
+                possible = tables if possible is None else possible & tables
+            possible = possible or set()
+            if len(possible) == 1:
+                table = next(iter(possible))
+                self.index_costs_by_key[(table, tuple(cols))] = cost
+            elif len(possible) > 1:
+                self.creation_cost_collisions[tuple(cols)] = set(possible)
+            else:
+                self.creation_cost_unresolved.add(tuple(cols))
+
+    def creation_cost_for(self, table: str, cols: Tuple[str, ...], default: float) -> float:
+        key = (norm_name(table), tuple(norm_name(c) for c in cols if norm_name(c)))
+        if key in self.index_costs_by_key:
+            return float(self.index_costs_by_key[key])
+        ctuple = key[1]
+        if ctuple in self.creation_cost_collisions:
+            return float(default)
+        return float(self.index_costs.get(ctuple, default))
 
 
     @staticmethod

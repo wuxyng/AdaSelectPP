@@ -64,6 +64,7 @@ class MetricsRecorder:
         "candidate_count",
         "evaluated_count",
         "preconf_count",
+        "filtered_nonpositive_count",
         "candidate_count_raw",
         "wdcg_pruned_count",
         "wdcg_selected_post_compile",
