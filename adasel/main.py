@@ -197,7 +197,7 @@ def main() -> int:
             "ratio": 0.5,
             "timeout": 30000,
             "min_width": 1,
-            "max_width": 3,
+            "max_width": 2,
             "rsfe_decay": 0.9,
         },
     )
@@ -221,6 +221,8 @@ def main() -> int:
     if args.min_width is not None:
         cfg_obj["min_width"] = int(args.min_width)
     if args.max_width is not None:
+        if int(args.max_width) > 2:
+            raise ValueError("Phase 0.5 AdaSelect-PG supports max_width <= 2 only")
         cfg_obj["max_width"] = int(args.max_width)
     if args.rsfe_decay is not None:
         cfg_obj["rsfe_decay"] = float(args.rsfe_decay)
@@ -240,6 +242,8 @@ def main() -> int:
                 fixed_lambda_mismatch = True
     if args.wdcg_enabled is not None:
         cfg_obj["wdcg_enabled"] = bool(int(args.wdcg_enabled))
+    if not bool(cfg_obj.get("wdcg_enabled", True)):
+        raise ValueError("wdcg_enabled=false is not supported by the active Phase 0.5 generator path")
 
 
     # ---- logging (stdout + file; log/csv share the same stem) ----
@@ -330,6 +334,8 @@ def main() -> int:
     if args.min_width is not None and hasattr(tuner, "min_width"):
         tuner.min_width = int(args.min_width)
     if args.max_width is not None and hasattr(tuner, "max_width"):
+        if int(args.max_width) > 2:
+            raise ValueError("Phase 0.5 AdaSelect-PG supports max_width <= 2 only")
         tuner.max_width = int(args.max_width)
     if args.rsfe_decay is not None and hasattr(tuner, "rsfe_decay"):
         tuner.rsfe_decay = float(args.rsfe_decay)

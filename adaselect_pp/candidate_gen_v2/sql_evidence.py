@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
+import logging
 from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from adaselect_pp.common import norm_name, split_template_sql, unique_keep_order
 from .types import QueryEvidence
 from .vocabulary import ColumnVocabulary
+
+logger = logging.getLogger(__name__)
 
 
 class StaticSQLExtractor:
@@ -39,6 +42,17 @@ class StaticSQLExtractor:
         except Exception:
             self._sqlglot = None
             self._exp = None
+        logger.info(
+            "StaticSQLExtractor init | dialect=%s sqlglot_available=%s tables=%d columns=%d",
+            self.dialect,
+            self.sqlglot_available,
+            len(self.tables),
+            sum(len(cols) for cols in self.columns.values()),
+        )
+
+    @property
+    def sqlglot_available(self) -> bool:
+        return self._sqlglot is not None
 
     def extract_line(self, line: str, query_id: int) -> QueryEvidence:
         tid, sql = split_template_sql(line, f"q{query_id}")
