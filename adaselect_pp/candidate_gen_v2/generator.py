@@ -145,12 +145,11 @@ class MCIGCandidateGenerator:
         cand.template_ids.add(str(template_id))
         cand.support_count = len(cand.query_ids)
 
-    def _score(self, cand: Candidate, mu_table: Dict[IndexKey, float]) -> float:
+    def _score(self, cand: Candidate) -> float:
         fam = self.FAMILY_SCORE.get(cand.family, 1.0)
         src = self.SOURCE_SCORE.get(cand.source, 0.0)
-        hist = max(0.0, float(mu_table.get(cand.key, 0.0) or 0.0))
         width_penalty = 0.15 * max(0, len(cand.key[1]) - 1)
-        return fam + src + 0.30 * cand.support_count + 0.10 * hist - width_penalty
+        return fam + src + 0.30 * cand.support_count + 0.20 * float(cand.confidence) - width_penalty
 
     def _best_eq_cols(self, evidence: QueryEvidence, table: str) -> List[str]:
         # Deterministic, conservative: filter EQ before join EQ.
@@ -207,7 +206,7 @@ class MCIGCandidateGenerator:
         # Query-local reducer.
         table_counts: Dict[str, int] = defaultdict(int)
         selected: Dict[IndexKey, Candidate] = {}
-        for key, cand in sorted(out.items(), key=lambda kv: (-self._score(kv[1], {}), kv[0])):
+        for key, cand in sorted(out.items(), key=lambda kv: (-self._score(kv[1]), kv[0])):
             if table_counts[key[0]] >= self.per_table_cap:
                 continue
             selected[key] = cand
@@ -226,7 +225,6 @@ class MCIGCandidateGenerator:
         **_ignored,
     ) -> GenerationResult:
         start = time.perf_counter()
-        mu = mu_table or {}
         per_query: List[Set[IndexKey]] = []
         merged: Dict[IndexKey, Candidate] = {}
         parse_status = Counter()
@@ -257,7 +255,7 @@ class MCIGCandidateGenerator:
                         existing.confidence = max(existing.confidence, cand.confidence)
 
         for cand in merged.values():
-            cand.score = self._score(cand, mu)
+            cand.score = self._score(cand)
 
         table_counts: Dict[str, int] = defaultdict(int)
         selected: List[Candidate] = []
@@ -318,6 +316,7 @@ class MCIGCandidateGenerator:
             "vocab_tables": len(self.vocab.mapping),
             "vocab_columns": sum(len(cols) for cols in self.vocab.mapping.values()),
             "sqlglot_available": int(self.extractor.sqlglot_available),
+            "raw_benefit_in_generator_score": False,
             "wdcg_elapsed_ms": (time.perf_counter() - start) * 1000.0,
         }
         if aff:
