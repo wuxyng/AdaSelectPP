@@ -95,23 +95,24 @@ class StaticSQLExtractor:
             if t and c and t in self.columns and c in self.columns[t] and self.vocab.is_allowed(t, c):
                 mp.setdefault(t, []).append(c)
 
-        def resolve_col(node) -> Optional[Tuple[str, str]]:
+        def resolve_col(node, *, require_allowed: bool = True) -> Optional[Tuple[str, str]]:
             if not isinstance(node, exp.Column):
                 return None
             col = norm_name(node.name)
             qualifier = norm_name(node.table) if node.table else ""
             if qualifier:
                 table = alias_to_table.get(qualifier, qualifier)
-                if table in self.columns and col in self.columns[table] and self.vocab.is_allowed(table, col):
+                if table in self.columns and col in self.columns[table]:
+                    if require_allowed and not self.vocab.is_allowed(table, col):
+                        return None
                     return table, col
                 return None
-            matches = [t for t in table_order if col in self.columns.get(t, set()) and self.vocab.is_allowed(t, col)]
+            matches = [t for t in table_order if col in self.columns.get(t, set())]
+            if require_allowed:
+                matches = [t for t in matches if self.vocab.is_allowed(t, col)]
             if len(matches) == 1:
                 return matches[0], col
             return None
-
-        def is_column(node) -> bool:
-            return isinstance(node, exp.Column)
 
         def is_literalish(node) -> bool:
             if node is None:
@@ -122,11 +123,15 @@ class StaticSQLExtractor:
         for pred in tree.find_all(exp.EQ):
             left = pred.left if hasattr(pred, "left") else pred.args.get("this")
             right = pred.right if hasattr(pred, "right") else pred.args.get("expression")
+            lvalid = resolve_col(left, require_allowed=False)
+            rvalid = resolve_col(right, require_allowed=False)
             lcol = resolve_col(left)
             rcol = resolve_col(right)
-            if lcol and rcol:
-                add(ev.join_eq, *lcol)
-                add(ev.join_eq, *rcol)
+            if lvalid and rvalid:
+                if lcol:
+                    add(ev.join_eq, *lcol)
+                if rcol:
+                    add(ev.join_eq, *rcol)
             elif lcol and is_literalish(right):
                 add(ev.filter_eq, *lcol)
             elif rcol and is_literalish(left):
@@ -233,11 +238,62 @@ class StaticSQLExtractor:
             if self.vocab.is_allowed(t, c):
                 mp.setdefault(t, []).append(c)
 
+        alias_to_table = {t: t for t in table_order}
+        for m in re.finditer(r"\b(?:from|join)\s+([a-z_][a-z0-9_]*)(?:\s+(?:as\s+)?([a-z_][a-z0-9_]*))?", q):
+            table = norm_name(m.group(1))
+            alias = norm_name(m.group(2))
+            if table in self.columns and alias and alias not in {"where", "join", "on", "and", "or", "group", "order", "limit"}:
+                alias_to_table[alias] = table
+
+        def split_ref(ref: str) -> Tuple[str, str]:
+            clean = re.sub(r"\s+", "", ref or "").strip('"')
+            if "." in clean:
+                qualifier, col = clean.split(".", 1)
+                return norm_name(qualifier), norm_name(col)
+            return "", norm_name(clean)
+
+        def resolve_ref(ref: str, *, require_allowed: bool = True) -> Optional[Tuple[str, str]]:
+            qualifier, col = split_ref(ref)
+            if not col:
+                return None
+            if qualifier:
+                table = alias_to_table.get(qualifier, qualifier)
+                if table in self.columns and col in self.columns[table]:
+                    if require_allowed and not self.vocab.is_allowed(table, col):
+                        return None
+                    return table, col
+                return None
+            matches = [t for t in table_order if col in self.columns.get(t, set())]
+            if require_allowed:
+                matches = [t for t in matches if self.vocab.is_allowed(t, col)]
+            if len(matches) == 1:
+                return matches[0], col
+            return None
+
+        join_refs: Set[Tuple[str, str]] = set()
+        ident = r'"?[a-z_][a-z0-9_]*"?'
+        colref = rf"(?:{ident}\s*\.\s*)?{ident}"
+        for m in re.finditer(rf"(?<![<>!=])\b({colref})\s*=\s*({colref})\b(?!\s*[=>])", q):
+            lvalid = resolve_ref(m.group(1), require_allowed=False)
+            rvalid = resolve_ref(m.group(2), require_allowed=False)
+            if not (lvalid and rvalid):
+                continue
+            lcol = resolve_ref(m.group(1))
+            rcol = resolve_ref(m.group(2))
+            if lcol:
+                add(ev.join_eq, *lcol)
+                join_refs.add(lcol)
+            if rcol:
+                add(ev.join_eq, *rcol)
+                join_refs.add(rcol)
+
         for t in table_order:
             for c in sorted(self.columns.get(t, set())):
                 if not self.vocab.is_allowed(t, c):
                     continue
                 if not re.search(r"\b" + re.escape(c) + r"\b", q):
+                    continue
+                if (t, c) in join_refs:
                     continue
                 if re.search(r"\b" + re.escape(c) + r"\s*=\s*", q):
                     add(ev.filter_eq, t, c)
