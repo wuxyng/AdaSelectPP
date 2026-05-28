@@ -93,7 +93,7 @@ def test_first_round_filters_positive_benefit_when_creation_cost_makes_net_nonpo
     tuner.workload_count = 0
     tuner.transition_mode = "symmetric"
     tuner.beta = 1.1
-    tuner.benefit_norm = SimpleNamespace(index_costs={("a",): 0.0, ("b",): 0.5})
+    tuner.benefit_norm = SimpleNamespace(index_costs={("a",): 0.0, ("b",): 0.8})
     tuner._m_stats = {
         "what_if_calls": 0,
         "reconf_add": 0,
