@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import subprocess
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -338,7 +339,7 @@ class AdaSelect:
     # ------------------------------------------------------------------
     @staticmethod
     def _minmax_norm(data: Dict[IndexKey, float]) -> Dict[IndexKey, float]:
-        """LiteSelect robust max-scale normalization with p95 clipping."""
+        """Legacy robust max-scale normalization retained for compatibility."""
         if not data:
             return {}
         vals = list(data.values())
@@ -359,6 +360,18 @@ class AdaSelect:
                 nv = -2.0
             normalized[k] = nv
         return normalized
+
+    @staticmethod
+    def _log_positive_norm(data: Dict[IndexKey, float]) -> Dict[IndexKey, float]:
+        """Normalize only positive benefit with log1p so one outlier does not flatten the field."""
+        if not data:
+            return {}
+        positives: Dict[IndexKey, float] = {k: max(0.0, float(v)) for k, v in data.items()}
+        scale = max(positives.values()) if positives else 0.0
+        if scale <= 0.0:
+            return {k: 0.0 for k in data}
+        denom = math.log1p(scale)
+        return {k: math.log1p(v) / denom for k, v in positives.items()}
 
     def _creation_cost(self, key: IndexKey) -> float:
         if hasattr(self.benefit_norm, "creation_cost_for"):
@@ -394,7 +407,7 @@ class AdaSelect:
         based: single-column seeds plus bounded width-2 prefix growth.
         """
         topk = max(1, self.max_num * self.candidate_topk_factor + self.candidate_topk_min_extra)
-        seed_norm = self._minmax_norm(self.columns_benefit)
+        seed_norm = self._log_positive_norm(self.columns_benefit)
         res = self.candidate_generator.generate(
             workload,
             old_conf=set(old_conf or set()),
@@ -635,8 +648,8 @@ class AdaSelect:
             return
 
         budget = len(appearing) if self.workload_count == 0 else max(1, int(float(self.ratio) * len(appearing)))
-        # LiteSelect order: benefit descending among candidates that appear this round.
-        norm_benefit = self._minmax_norm({idx: self.columns_benefit.get(idx, 0.0) for idx in appearing})
+        # Robust log-scaled positive benefit keeps a huge winner from flattening medium positives.
+        norm_benefit = self._log_positive_norm({idx: self.columns_benefit.get(idx, 0.0) for idx in appearing})
         order = [idx for idx, _ in sorted(norm_benefit.items(), key=lambda kv: (-kv[1], kv[0]))]
         self._last_eval_order = list(order)
         logger.info(
@@ -675,7 +688,7 @@ class AdaSelect:
 
     def _choose_config(self, old_conf: Set[IndexKey]) -> Set[IndexKey]:
         old_canon = {_canon(k) for k in old_conf}
-        normalized = self._minmax_norm(self.columns_benefit)
+        normalized = self._log_positive_norm(self.columns_benefit)
         net: Dict[IndexKey, float] = {}
         for key, val in normalized.items():
             cost = 0.0 if key in old_canon else self._creation_cost(key)
