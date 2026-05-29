@@ -69,6 +69,9 @@ def _structural_pair_type(key: IndexKey, meta: Dict[str, Any], meta_map: Dict[In
     if len(key[1]) != 2:
         return ""
     family = str(meta.get("family", "") or "")
+    explicit_type = str(meta.get("structural_pair_type", "") or "")
+    if explicit_type:
+        return explicit_type
     seed_key = _parse_index_key(meta.get("seed_key", ""))
     seed_meta = meta_map.get(seed_key, {}) if seed_key is not None and isinstance(meta_map, dict) else {}
     seed_family = str(seed_meta.get("family", "") or "") if isinstance(seed_meta, dict) else ""
@@ -143,6 +146,28 @@ class TraceRecorder:
         "rejected_growth_reason",
         "covered_prefix_singles",
         "structural_pair_type",
+        "left_prefix_single",
+        "component_singles",
+        "left_prefix_in_old",
+        "left_prefix_in_new",
+        "left_prefix_in_candidate",
+        "marginal_benefit",
+        "replacement_benefit_raw",
+        "replacement_benefit",
+        "replacement_normalized_benefit",
+        "replacement_creation_cost",
+        "replacement_net_benefit",
+        "replacement_probe_count",
+        "replacement_what_if_calls",
+        "replacement_hit_count",
+        "replacement_ok_count",
+        "replacement_fail_count",
+        "replacement_diag_time",
+        "structural_pair_quota",
+        "structural_pair_eval_count",
+        "structural_pair_eval_selected_keys",
+        "structural_pair_eval_budgeted_out_count",
+        "structural_pair_eval_lane_enabled",
         # AdaSelect-only (best effort; blank for LiteSelect)
         "lambda",
         "lambda_shadow",
@@ -281,6 +306,7 @@ class TraceRecorder:
         net_benefit_map: Dict[IndexKey, Any] = {}
         obs_delta_map: Dict[IndexKey, Any] = {}
         obs_src_map: Dict[IndexKey, Any] = {}
+        replacement_map: Dict[IndexKey, Dict[str, Any]] = {}
         decision_stats: Dict[str, Any] = {}
         if tuner is not None:
             try:
@@ -299,6 +325,10 @@ class TraceRecorder:
                 obs_src_map = getattr(tuner, "_last_obs_src_map", {}) or {}
             except Exception:
                 obs_src_map = {}
+            try:
+                replacement_map = getattr(tuner, "_last_structural_pair_replacement_map", {}) or {}
+            except Exception:
+                replacement_map = {}
             try:
                 decision_stats = getattr(tuner, "_last_decision_stats", {}) or {}
             except Exception:
@@ -358,6 +388,21 @@ class TraceRecorder:
 
             covered = ""
             structural_pair_type = ""
+            left_prefix_single = ""
+            component_singles = ""
+            left_prefix_in_old = ""
+            left_prefix_in_new = ""
+            left_prefix_in_candidate = ""
+            marginal_benefit = ""
+            replacement_benefit_raw = ""
+            replacement_benefit = ""
+            replacement_normalized_benefit = ""
+            replacement_creation_cost = ""
+            replacement_net_benefit = ""
+            replacement_hit_count = ""
+            replacement_ok_count = ""
+            replacement_fail_count = ""
+            replacement_diag_time = ""
             if len(k[1]) == 2:
                 try:
                     covered = ";".join(_fmt_index_key(x) for x in covered_prefix_singles(k, set(old_conf), candidate))
@@ -367,6 +412,33 @@ class TraceRecorder:
                     structural_pair_type = _structural_pair_type(k, meta if isinstance(meta, dict) else {}, meta_map)
                 except Exception:
                     structural_pair_type = ""
+                repl = replacement_map.get(k, {}) if isinstance(replacement_map, dict) else {}
+                if isinstance(repl, dict):
+                    lp = repl.get("left_prefix_single", None)
+                    comps = tuple(repl.get("component_singles", tuple()) or tuple())
+                    if lp:
+                        try:
+                            left_prefix_single = _fmt_index_key(lp)
+                            left_prefix_in_old = 1 if lp in old_conf else 0
+                            left_prefix_in_new = 1 if lp in final_conf_logged else 0
+                            left_prefix_in_candidate = 1 if lp in candidate else 0
+                        except Exception:
+                            left_prefix_single = ""
+                    if comps:
+                        try:
+                            component_singles = ";".join(_fmt_index_key(x) for x in comps)
+                        except Exception:
+                            component_singles = ""
+                    marginal_benefit = repl.get("marginal_benefit", "")
+                    replacement_benefit_raw = repl.get("replacement_benefit_raw", "")
+                    replacement_benefit = repl.get("replacement_benefit", "")
+                    replacement_normalized_benefit = repl.get("replacement_normalized_benefit", "")
+                    replacement_creation_cost = repl.get("replacement_creation_cost", "")
+                    replacement_net_benefit = repl.get("replacement_net_benefit", "")
+                    replacement_hit_count = repl.get("replacement_hit_count", "")
+                    replacement_ok_count = repl.get("replacement_ok_count", "")
+                    replacement_fail_count = repl.get("replacement_fail_count", "")
+                    replacement_diag_time = repl.get("replacement_diag_time", "")
 
             net_benefit = ""
             try:
@@ -461,6 +533,28 @@ class TraceRecorder:
                 "rejected_growth_reason": meta.get("rejected_growth_reason", "") if isinstance(meta, dict) else "",
                 "covered_prefix_singles": covered,
                 "structural_pair_type": structural_pair_type,
+                "left_prefix_single": left_prefix_single,
+                "component_singles": component_singles,
+                "left_prefix_in_old": left_prefix_in_old,
+                "left_prefix_in_new": left_prefix_in_new,
+                "left_prefix_in_candidate": left_prefix_in_candidate,
+                "marginal_benefit": marginal_benefit,
+                "replacement_benefit_raw": replacement_benefit_raw,
+                "replacement_benefit": replacement_benefit,
+                "replacement_normalized_benefit": replacement_normalized_benefit,
+                "replacement_creation_cost": replacement_creation_cost,
+                "replacement_net_benefit": replacement_net_benefit,
+                "replacement_probe_count": wdcg_stats.get("replacement_probe_count", ""),
+                "replacement_what_if_calls": wdcg_stats.get("replacement_what_if_calls", ""),
+                "replacement_hit_count": replacement_hit_count,
+                "replacement_ok_count": replacement_ok_count,
+                "replacement_fail_count": replacement_fail_count,
+                "replacement_diag_time": replacement_diag_time,
+                "structural_pair_quota": wdcg_stats.get("structural_pair_quota", ""),
+                "structural_pair_eval_count": wdcg_stats.get("structural_pair_eval_count", ""),
+                "structural_pair_eval_selected_keys": wdcg_stats.get("structural_pair_eval_selected_keys", ""),
+                "structural_pair_eval_budgeted_out_count": wdcg_stats.get("structural_pair_eval_budgeted_out_count", ""),
+                "structural_pair_eval_lane_enabled": wdcg_stats.get("structural_pair_eval_lane_enabled", ""),
                 "lambda": lam,
                 "lambda_shadow": lam_shadow,
                 "rsfe": rsfe,
