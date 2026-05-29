@@ -24,6 +24,10 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "seed_count",
     "eligible_seed_count",
     "multi_growth_count",
+    "structural_pair_quota",
+    "structural_pair_eval_count",
+    "structural_pair_eval_budgeted_out_count",
+    "structural_pair_eval_lane_enabled",
 )
 
 TOTAL_COLUMNS: Sequence[str] = (
@@ -172,16 +176,35 @@ def _summarize_width2_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[
     by_evaluation = Counter(_width2_key(r) for r in evaluated)
     by_selected = Counter(_width2_key(r) for r in selected)
     by_budget = Counter(_width2_key(r) for r in blocked_by_budget)
+    replacement_rows = [r for r in width2_rows if str(r.get("replacement_benefit", "")).strip() != ""]
+    by_replacement = Counter(
+        _width2_key(r)
+        for r in sorted(replacement_rows, key=lambda row: _as_float(row.get("replacement_benefit")), reverse=True)[:5]
+    )
+    per_round: Dict[str, Dict[str, str]] = {}
+    for row in trace_rows:
+        rid = str(row.get("round", "")).strip()
+        if rid and rid not in per_round:
+            per_round[rid] = row
+    quota_total = sum(_as_int(r.get("structural_pair_quota")) for r in per_round.values())
+    structural_eval_total = sum(_as_int(r.get("structural_pair_eval_count")) for r in per_round.values())
+    budgeted_total = sum(_as_int(r.get("structural_pair_eval_budgeted_out_count")) for r in per_round.values())
+    lane_rounds = sum(1 for r in per_round.values() if _truthy(r.get("structural_pair_eval_lane_enabled")))
 
     return [
         f"- width2_appeared_count: {len(appeared)}",
         f"- width2_evaluated_count: {len(evaluated)}",
         f"- width2_selected_count: {len(selected)}",
         f"- width2_with_zero_benefit_count: {len(zero_benefit)}",
+        f"- structural_pair_quota_total: {quota_total}",
+        f"- structural_pair_eval_count_total: {structural_eval_total}",
+        f"- structural_pair_eval_budgeted_out_count_total: {budgeted_total}",
+        f"- structural_pair_eval_lane_enabled_rounds: {lane_rounds}",
         f"- top_width2_by_appearance: {_top_counter(by_appearance)}",
         f"- top_width2_by_evaluation: {_top_counter(by_evaluation)}",
         f"- top_width2_by_selected_count: {_top_counter(by_selected)}",
         f"- top_width2_blocked_by_budget: {_top_counter(by_budget)}",
+        f"- top_width2_by_replacement_diagnostic: {_top_counter(by_replacement)}",
     ]
 
 
