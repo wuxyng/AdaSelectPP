@@ -12,7 +12,7 @@ import csv
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 
 NUMERIC_COLUMNS: Sequence[str] = (
@@ -76,6 +76,11 @@ def _read_rows(path: Path) -> List[Dict[str, str]]:
         return rows
 
 
+def _read_csv_rows(path: Path) -> List[Dict[str, str]]:
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        return list(csv.DictReader(fh))
+
+
 def _is_metrics_csv(path: Path) -> bool:
     if path.name.endswith(".trace.csv"):
         return False
@@ -84,6 +89,18 @@ def _is_metrics_csv(path: Path) -> bool:
             reader = csv.DictReader(fh)
             fields = set(reader.fieldnames or [])
         return {"round", "candidate_count", "evaluated_count"}.issubset(fields)
+    except Exception:
+        return False
+
+
+def _is_trace_csv(path: Path) -> bool:
+    if not path.name.endswith(".trace.csv"):
+        return False
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            fields = set(reader.fieldnames or [])
+        return {"round", "table", "cols", "in_appearing", "in_eval", "in_new"}.issubset(fields)
     except Exception:
         return False
 
@@ -106,7 +123,69 @@ def _case_name(path: Path, run_dir: Path) -> str:
     return path.stem
 
 
-def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]]) -> List[str]:
+def _trace_rows_for_case(csv_path: Path) -> Optional[List[Dict[str, str]]]:
+    trace_paths = sorted(p for p in csv_path.parent.glob("*.trace.csv") if _is_trace_csv(p))
+    if not trace_paths:
+        return None
+    rows: List[Dict[str, str]] = []
+    for path in trace_paths:
+        rows.extend(_read_csv_rows(path))
+    return rows
+
+
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _width2_key(row: Dict[str, str]) -> str:
+    table = str(row.get("table", "")).strip()
+    cols = str(row.get("cols", "")).strip()
+    return f"{table}({cols})" if table and cols else cols
+
+
+def _is_width2_trace_row(row: Dict[str, str]) -> bool:
+    cols = [c.strip() for c in str(row.get("cols", "")).split(",") if c.strip()]
+    return len(cols) == 2
+
+
+def _top_counter(counter: Counter, limit: int = 5) -> str:
+    if not counter:
+        return "none"
+    return ", ".join(f"{name}={count}" for name, count in counter.most_common(limit))
+
+
+def _summarize_width2_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[str]:
+    if trace_rows is None:
+        return ["- width2_trace: unavailable"]
+
+    width2_rows = [r for r in trace_rows if _is_width2_trace_row(r)]
+    appeared = [r for r in width2_rows if _truthy(r.get("in_appearing"))]
+    evaluated = [r for r in width2_rows if _truthy(r.get("in_eval"))]
+    selected = [r for r in width2_rows if _truthy(r.get("in_new"))]
+    zero_benefit = [
+        r for r in width2_rows
+        if str(r.get("benefit", "")).strip() != "" and abs(_as_float(r.get("benefit"))) <= 1e-12
+    ]
+    blocked_by_budget = [r for r in appeared if not _truthy(r.get("in_eval"))]
+
+    by_appearance = Counter(_width2_key(r) for r in appeared)
+    by_evaluation = Counter(_width2_key(r) for r in evaluated)
+    by_selected = Counter(_width2_key(r) for r in selected)
+    by_budget = Counter(_width2_key(r) for r in blocked_by_budget)
+
+    return [
+        f"- width2_appeared_count: {len(appeared)}",
+        f"- width2_evaluated_count: {len(evaluated)}",
+        f"- width2_selected_count: {len(selected)}",
+        f"- width2_with_zero_benefit_count: {len(zero_benefit)}",
+        f"- top_width2_by_appearance: {_top_counter(by_appearance)}",
+        f"- top_width2_by_evaluation: {_top_counter(by_evaluation)}",
+        f"- top_width2_by_selected_count: {_top_counter(by_selected)}",
+        f"- top_width2_blocked_by_budget: {_top_counter(by_budget)}",
+    ]
+
+
+def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]], trace_rows: Optional[List[Dict[str, str]]] = None) -> List[str]:
     warnings: List[str] = []
     total_rounds = len(rows)
     timeout_count = sum(_as_int(r.get("timeout")) for r in rows)
@@ -159,6 +238,7 @@ def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]]) -> Li
     for col in TOTAL_COLUMNS:
         vals = [_as_float(r.get(col)) for r in rows]
         lines.append(f"- {col}_total: {_fmt(sum(vals))}")
+    lines.extend(_summarize_width2_trace(trace_rows))
 
     if warnings:
         lines.append("- warnings:")
@@ -195,7 +275,7 @@ def main(argv: Sequence[str]) -> int:
         lines.append("No metrics CSV files found.")
     for path in csv_paths:
         rows = _read_rows(path)
-        lines.extend(_summarize_case(_case_name(path, run_dir), path, rows))
+        lines.extend(_summarize_case(_case_name(path, run_dir), path, rows, _trace_rows_for_case(path)))
     out.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     print(out)
     return 0
