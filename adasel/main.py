@@ -358,6 +358,12 @@ def main() -> int:
         "what_if_calls",
         "candidate_count",
         "evaluated_count",
+        "replacement_probe_count",
+        "replacement_what_if_calls",
+        "replacement_hit_count",
+        "replacement_ok_count",
+        "replacement_fail_count",
+        "replacement_diag_time",
         "filtered_nonpositive_count",
         "reconf_add",
         "reconf_drop",
@@ -369,6 +375,7 @@ def main() -> int:
     # totals for summary
     tot_exec = tot_rec = tot_trans = tot_total = 0.0
     tot_whatif = tot_cand = tot_eval = 0.0
+    tot_repl_probe = tot_repl_whatif = tot_repl_hit = tot_repl_ok = tot_repl_fail = tot_repl_diag_time = 0.0
 
     for rid, workload in enumerate(workloads):
         # (1) execute workload under current physical config
@@ -464,6 +471,12 @@ def main() -> int:
             what_if_calls=d.get("what_if_calls", 0.0),
             candidate_count=d.get("candidate_count", 0.0),
             evaluated_count=d.get("evaluated_count", 0.0),
+            replacement_probe_count=d.get("replacement_probe_count", 0.0),
+            replacement_what_if_calls=d.get("replacement_what_if_calls", 0.0),
+            replacement_hit_count=d.get("replacement_hit_count", 0.0),
+            replacement_ok_count=d.get("replacement_ok_count", 0.0),
+            replacement_fail_count=d.get("replacement_fail_count", 0.0),
+            replacement_diag_time=d.get("replacement_diag_time", 0.0),
             filtered_nonpositive_count=d.get("filtered_nonpositive_count", 0.0),
             preconf_count=len(getattr(tuner, "_last_candidate_conf", set()) or set()),
             candidate_count_raw=wdcg_stats.get("candidate_count_raw", None),
@@ -520,6 +533,11 @@ def main() -> int:
             wdcg_skipped_dominated=wdcg_stats.get("wdcg_skipped_dominated", None),
             coverage_boost_added=wdcg_stats.get("coverage_boost_added", None),
             wdcg_warmup_active=wdcg_stats.get("wdcg_warmup_active", None),
+            structural_pair_quota=wdcg_stats.get("structural_pair_quota", None),
+            structural_pair_eval_count=wdcg_stats.get("structural_pair_eval_count", None),
+            structural_pair_eval_selected_keys=wdcg_stats.get("structural_pair_eval_selected_keys", None),
+            structural_pair_eval_budgeted_out_count=wdcg_stats.get("structural_pair_eval_budgeted_out_count", None),
+            structural_pair_eval_lane_enabled=wdcg_stats.get("structural_pair_eval_lane_enabled", None),
             aff_avg=wdcg_stats.get("aff_avg", None),
             aff_p90=wdcg_stats.get("aff_p90", None),
             aff_max=wdcg_stats.get("aff_max", None),
@@ -577,6 +595,12 @@ def main() -> int:
         tot_whatif += d.get("what_if_calls", 0.0)
         tot_cand += d.get("candidate_count", 0.0)
         tot_eval += d.get("evaluated_count", 0.0)
+        tot_repl_probe += d.get("replacement_probe_count", 0.0)
+        tot_repl_whatif += d.get("replacement_what_if_calls", 0.0)
+        tot_repl_hit += d.get("replacement_hit_count", 0.0)
+        tot_repl_ok += d.get("replacement_ok_count", 0.0)
+        tot_repl_fail += d.get("replacement_fail_count", 0.0)
+        tot_repl_diag_time += d.get("replacement_diag_time", 0.0)
 
         # (optional) log wall-clock of executing queries (for debugging)
         logger.info(
@@ -600,6 +624,12 @@ def main() -> int:
         whatif_sum=tot_whatif,
         cand_sum=tot_cand,
         eval_sum=tot_eval,
+        replacement_probe_count=tot_repl_probe,
+        replacement_what_if_calls=tot_repl_whatif,
+        replacement_hit_count=tot_repl_hit,
+        replacement_ok_count=tot_repl_ok,
+        replacement_fail_count=tot_repl_fail,
+        replacement_diag_time=tot_repl_diag_time,
     )
 
     try:
