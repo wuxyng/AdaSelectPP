@@ -12,6 +12,7 @@ Key properties
 
 from __future__ import annotations
 
+import ast
 import csv
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,55 @@ def _fmt_cols(cols: Tuple[str, ...]) -> str:
 
 def _sort_key(k: IndexKey) -> Tuple[str, int, Tuple[str, ...]]:
     return (k[0], len(k[1]), k[1])
+
+
+def _fmt_index_key(k: IndexKey) -> str:
+    return f"{k[0]}({_fmt_cols(k[1])})"
+
+
+def _parse_index_key(value: Any) -> Optional[IndexKey]:
+    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], tuple):
+        return str(value[0]), tuple(str(c) for c in value[1])
+    if not value:
+        return None
+    try:
+        obj = ast.literal_eval(str(value))
+    except Exception:
+        return None
+    if isinstance(obj, tuple) and len(obj) == 2:
+        table = str(obj[0])
+        cols = obj[1]
+        if isinstance(cols, (tuple, list)):
+            return table, tuple(str(c) for c in cols)
+    return None
+
+
+def covered_prefix_singles(pair: IndexKey, old_conf: Set[IndexKey], candidate_conf: Set[IndexKey]) -> Tuple[IndexKey, ...]:
+    """Return same-table singles in old/candidate config that are components of a pair."""
+    table, cols = pair
+    if len(cols) < 2:
+        return tuple()
+    context = set(old_conf or set()) | set(candidate_conf or set())
+    singles = []
+    for col in cols:
+        single = (table, (col,))
+        if single in context:
+            singles.append(single)
+    return tuple(singles)
+
+
+def _structural_pair_type(key: IndexKey, meta: Dict[str, Any], meta_map: Dict[IndexKey, Any]) -> str:
+    if len(key[1]) != 2:
+        return ""
+    family = str(meta.get("family", "") or "")
+    seed_key = _parse_index_key(meta.get("seed_key", ""))
+    seed_meta = meta_map.get(seed_key, {}) if seed_key is not None and isinstance(meta_map, dict) else {}
+    seed_family = str(seed_meta.get("family", "") or "") if isinstance(seed_meta, dict) else ""
+    if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
+        return "JOIN_RANGE"
+    if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
+        return "JOIN_EQ"
+    return family
 
 
 @dataclass
@@ -91,6 +141,8 @@ class TraceRecorder:
         "seed_mature",
         "grow_reason",
         "rejected_growth_reason",
+        "covered_prefix_singles",
+        "structural_pair_type",
         # AdaSelect-only (best effort; blank for LiteSelect)
         "lambda",
         "lambda_shadow",
@@ -180,7 +232,11 @@ class TraceRecorder:
             except Exception:
                 meta_map = {}
                 compile_rejected = set()
-        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected)
+        width2_meta = {
+            k for k in meta_map
+            if isinstance(k, tuple) and len(k) == 2 and isinstance(k[1], tuple) and len(k[1]) == 2
+        } if isinstance(meta_map, dict) else set()
+        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected | width2_meta)
 
         # Per-round WDCG funnel stats (optional; repeat on each row)
         wdcg_stats: Dict[str, Any] = {}
@@ -295,8 +351,22 @@ class TraceRecorder:
             try:
                 if k in wdcg_score_map:
                     wdcg_score = float(wdcg_score_map.get(k, ""))
+                elif isinstance(meta, dict) and meta.get("score", "") != "":
+                    wdcg_score = float(meta.get("score", ""))
             except Exception:
                 wdcg_score = ""
+
+            covered = ""
+            structural_pair_type = ""
+            if len(k[1]) == 2:
+                try:
+                    covered = ";".join(_fmt_index_key(x) for x in covered_prefix_singles(k, set(old_conf), candidate))
+                except Exception:
+                    covered = ""
+                try:
+                    structural_pair_type = _structural_pair_type(k, meta if isinstance(meta, dict) else {}, meta_map)
+                except Exception:
+                    structural_pair_type = ""
 
             net_benefit = ""
             try:
@@ -389,6 +459,8 @@ class TraceRecorder:
                 "seed_mature": meta.get("seed_mature", "") if isinstance(meta, dict) else "",
                 "grow_reason": meta.get("grow_reason", "") if isinstance(meta, dict) else "",
                 "rejected_growth_reason": meta.get("rejected_growth_reason", "") if isinstance(meta, dict) else "",
+                "covered_prefix_singles": covered,
+                "structural_pair_type": structural_pair_type,
                 "lambda": lam,
                 "lambda_shadow": lam_shadow,
                 "rsfe": rsfe,
