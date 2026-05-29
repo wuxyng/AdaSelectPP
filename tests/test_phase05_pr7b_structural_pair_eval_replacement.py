@@ -184,6 +184,9 @@ def test_replacement_diagnostic_uses_left_prefix_context_only():
     tuner.db_con2 = db2
     tuner.cost_eval = FakeCostEval([70.0])
     tuner.benefit_norm = SimpleNamespace(index_costs={("a", "b"): 0.13})
+    tuner.columns_benefit = {A: 100.0, B: 90.0, PAIR: 1.0}
+    tuner._m_stats = {}
+    tuner._last_wdcg_stats = {}
     tuner._last_obs_delta_map = {PAIR: 12.0}
     tuner._last_structural_pair_replacement_map = {}
 
@@ -203,8 +206,23 @@ def test_replacement_diagnostic_uses_left_prefix_context_only():
     assert diag["left_prefix_in_new"] is False
     assert diag["left_prefix_in_candidate"] is False
     assert diag["marginal_benefit"] == 12.0
+    assert diag["replacement_benefit_raw"] == 30.0
     assert diag["replacement_benefit"] == 30.0
-    assert diag["replacement_net_benefit"] == pytest.approx(29.87)
+    assert diag["replacement_creation_cost"] == 0.13
+    assert 0.0 <= diag["replacement_normalized_benefit"] <= 1.0
+    assert diag["replacement_net_benefit"] == pytest.approx(
+        diag["replacement_normalized_benefit"] - diag["replacement_creation_cost"]
+    )
+    assert diag["replacement_hit_count"] == 1
+    assert diag["replacement_ok_count"] == 1
+    assert diag["replacement_fail_count"] == 0
+    assert tuner._m_stats["replacement_probe_count"] == 1
+    assert tuner._m_stats["replacement_what_if_calls"] == 1
+    assert tuner._m_stats["replacement_hit_count"] == 1
+    assert tuner._m_stats["replacement_ok_count"] == 1
+    assert tuner._m_stats["replacement_fail_count"] == 0
+    assert tuner._last_wdcg_stats["replacement_probe_count"] == 1
+    assert tuner._last_wdcg_stats["replacement_what_if_calls"] == 1
     assert ("disable", "t", ("a",)) in db2.ops
     assert ("enable", "t", ("a",)) in db2.ops
     assert ("disable", "t", ("b",)) not in db2.ops

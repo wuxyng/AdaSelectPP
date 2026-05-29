@@ -21,6 +21,7 @@ import logging
 import math
 import re
 import subprocess
+import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from adaselect_pp.common import sql_only
@@ -200,6 +201,12 @@ class AdaSelect:
             "what_if_calls": 0,
             "candidate_count": 0,
             "evaluated_count": 0,
+            "replacement_probe_count": 0,
+            "replacement_what_if_calls": 0,
+            "replacement_hit_count": 0,
+            "replacement_ok_count": 0,
+            "replacement_fail_count": 0,
+            "replacement_diag_time": 0.0,
             "reconf_add": 0,
             "reconf_drop": 0,
             "trans_create": 0.0,
@@ -493,6 +500,16 @@ class AdaSelect:
             "replacement_conf": replacement_conf,
         }
 
+    def _bump_replacement_metric(self, name: str, value: float = 1.0) -> None:
+        try:
+            self._m_stats[name] = self._m_stats.get(name, 0.0) + value
+        except Exception:
+            pass
+        try:
+            self._last_wdcg_stats[name] = self._last_wdcg_stats.get(name, 0.0) + value
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Core flow
     # ------------------------------------------------------------------
@@ -746,9 +763,16 @@ class AdaSelect:
         old_conf: Set[IndexKey],
         workload: List[str],
     ) -> None:
+        diag_start = time.perf_counter()
+        self._bump_replacement_metric("replacement_probe_count", 1)
         context = self._structural_pair_replacement_context(pair, old_conf)
         left_prefix = context.get("left_prefix_single")
         component_singles = tuple(context.get("component_singles", tuple()) or tuple())
+        creation_cost = ""
+        try:
+            creation_cost = float(self._creation_cost(pair))
+        except Exception:
+            creation_cost = ""
         diag: Dict[str, Any] = {
             "left_prefix_single": left_prefix,
             "component_singles": component_singles,
@@ -756,12 +780,16 @@ class AdaSelect:
             "left_prefix_in_new": False,
             "left_prefix_in_candidate": False,
             "marginal_benefit": float(self._last_obs_delta_map.get(pair, 0.0)),
+            "replacement_benefit_raw": "",
             "replacement_benefit": "",
+            "replacement_normalized_benefit": "",
+            "replacement_creation_cost": creation_cost,
             "replacement_net_benefit": "",
             "replacement_obs_src": "SKIPPED",
         }
         self._last_structural_pair_replacement_map[pair] = diag
         if left_prefix is None or len(pair[1]) != 2:
+            self._bump_replacement_metric("replacement_diag_time", (time.perf_counter() - diag_start) * 1000.0)
             return
 
         tbl, cols = pair
@@ -778,6 +806,7 @@ class AdaSelect:
             for i, (q_idxs, base_cost) in enumerate(zip(query_indexes, base_costs)):
                 if pair in q_idxs or left_prefix in q_idxs:
                     hit_cnt += 1
+                    self._bump_replacement_metric("replacement_what_if_calls", 1)
                     try:
                         total_cost += float(self.cost_eval.calculate_now_cost([workload[i]]))
                         ok_cnt += 1
@@ -787,9 +816,21 @@ class AdaSelect:
                         fail_cnt += 1
                 else:
                     total_cost += float(base_cost)
-            replacement_benefit = float(base_total - total_cost)
-            diag["replacement_benefit"] = replacement_benefit
-            diag["replacement_net_benefit"] = replacement_benefit - float(self._creation_cost(pair))
+            replacement_benefit_raw = float(base_total - total_cost)
+            replacement_normalized_benefit = 0.0
+            try:
+                scale_map = dict(getattr(self, "columns_benefit", {}) or {})
+                scale_map[pair] = max(float(scale_map.get(pair, 0.0) or 0.0), replacement_benefit_raw)
+                replacement_normalized_benefit = float(self._log_positive_norm(scale_map).get(pair, 0.0))
+            except Exception:
+                replacement_normalized_benefit = 0.0
+            replacement_creation_cost = float(creation_cost) if creation_cost != "" else 0.0
+            diag["replacement_benefit_raw"] = replacement_benefit_raw
+            # Backward-compatible alias; raw units are explicit in replacement_benefit_raw.
+            diag["replacement_benefit"] = replacement_benefit_raw
+            diag["replacement_normalized_benefit"] = replacement_normalized_benefit
+            diag["replacement_creation_cost"] = replacement_creation_cost
+            diag["replacement_net_benefit"] = replacement_normalized_benefit - replacement_creation_cost
             if hit_cnt <= 0:
                 diag["replacement_obs_src"] = "NO_HIT"
             elif ok_cnt <= 0:
@@ -815,6 +856,12 @@ class AdaSelect:
         diag["replacement_hit_count"] = hit_cnt
         diag["replacement_ok_count"] = ok_cnt
         diag["replacement_fail_count"] = fail_cnt
+        diag_time = (time.perf_counter() - diag_start) * 1000.0
+        diag["replacement_diag_time"] = diag_time
+        self._bump_replacement_metric("replacement_hit_count", hit_cnt)
+        self._bump_replacement_metric("replacement_ok_count", ok_cnt)
+        self._bump_replacement_metric("replacement_fail_count", fail_cnt)
+        self._bump_replacement_metric("replacement_diag_time", diag_time)
 
     def _estimate_benefits(self, workload: List[str], old_conf: Set[IndexKey]) -> None:
         self._reset_round_diagnostics()
@@ -829,6 +876,12 @@ class AdaSelect:
             "structural_pair_eval_selected_keys": "",
             "structural_pair_eval_budgeted_out_count": 0,
             "structural_pair_eval_lane_enabled": 0,
+            "replacement_probe_count": 0,
+            "replacement_what_if_calls": 0,
+            "replacement_hit_count": 0,
+            "replacement_ok_count": 0,
+            "replacement_fail_count": 0,
+            "replacement_diag_time": 0.0,
         })
         if not appearing:
             logger.info("BenefitBudget | appearing=0 base_total=%.3f", base_total)
