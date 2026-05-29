@@ -152,8 +152,17 @@ class TraceRecorder:
         "left_prefix_in_new",
         "left_prefix_in_candidate",
         "marginal_benefit",
+        "replacement_benefit_raw",
         "replacement_benefit",
+        "replacement_normalized_benefit",
+        "replacement_creation_cost",
         "replacement_net_benefit",
+        "replacement_probe_count",
+        "replacement_what_if_calls",
+        "replacement_hit_count",
+        "replacement_ok_count",
+        "replacement_fail_count",
+        "replacement_diag_time",
         "structural_pair_quota",
         "structural_pair_eval_count",
         "structural_pair_eval_selected_keys",
@@ -385,8 +394,15 @@ class TraceRecorder:
             left_prefix_in_new = ""
             left_prefix_in_candidate = ""
             marginal_benefit = ""
+            replacement_benefit_raw = ""
             replacement_benefit = ""
+            replacement_normalized_benefit = ""
+            replacement_creation_cost = ""
             replacement_net_benefit = ""
+            replacement_hit_count = ""
+            replacement_ok_count = ""
+            replacement_fail_count = ""
+            replacement_diag_time = ""
             if len(k[1]) == 2:
                 try:
                     covered = ";".join(_fmt_index_key(x) for x in covered_prefix_singles(k, set(old_conf), candidate))
@@ -414,8 +430,15 @@ class TraceRecorder:
                         except Exception:
                             component_singles = ""
                     marginal_benefit = repl.get("marginal_benefit", "")
+                    replacement_benefit_raw = repl.get("replacement_benefit_raw", "")
                     replacement_benefit = repl.get("replacement_benefit", "")
+                    replacement_normalized_benefit = repl.get("replacement_normalized_benefit", "")
+                    replacement_creation_cost = repl.get("replacement_creation_cost", "")
                     replacement_net_benefit = repl.get("replacement_net_benefit", "")
+                    replacement_hit_count = repl.get("replacement_hit_count", "")
+                    replacement_ok_count = repl.get("replacement_ok_count", "")
+                    replacement_fail_count = repl.get("replacement_fail_count", "")
+                    replacement_diag_time = repl.get("replacement_diag_time", "")
 
             net_benefit = ""
             try:
@@ -516,8 +539,17 @@ class TraceRecorder:
                 "left_prefix_in_new": left_prefix_in_new,
                 "left_prefix_in_candidate": left_prefix_in_candidate,
                 "marginal_benefit": marginal_benefit,
+                "replacement_benefit_raw": replacement_benefit_raw,
                 "replacement_benefit": replacement_benefit,
+                "replacement_normalized_benefit": replacement_normalized_benefit,
+                "replacement_creation_cost": replacement_creation_cost,
                 "replacement_net_benefit": replacement_net_benefit,
+                "replacement_probe_count": wdcg_stats.get("replacement_probe_count", ""),
+                "replacement_what_if_calls": wdcg_stats.get("replacement_what_if_calls", ""),
+                "replacement_hit_count": replacement_hit_count,
+                "replacement_ok_count": replacement_ok_count,
+                "replacement_fail_count": replacement_fail_count,
+                "replacement_diag_time": replacement_diag_time,
                 "structural_pair_quota": wdcg_stats.get("structural_pair_quota", ""),
                 "structural_pair_eval_count": wdcg_stats.get("structural_pair_eval_count", ""),
                 "structural_pair_eval_selected_keys": wdcg_stats.get("structural_pair_eval_selected_keys", ""),

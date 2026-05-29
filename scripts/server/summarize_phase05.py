@@ -33,6 +33,12 @@ NUMERIC_COLUMNS: Sequence[str] = (
 TOTAL_COLUMNS: Sequence[str] = (
     "what_if_calls",
     "filtered_nonpositive_count",
+    "replacement_probe_count",
+    "replacement_what_if_calls",
+    "replacement_hit_count",
+    "replacement_ok_count",
+    "replacement_fail_count",
+    "replacement_diag_time",
     "rejected_growth_has_or",
     "rejected_growth_alias_ambiguous",
     "rejected_growth_seed_not_positive",
@@ -176,10 +182,17 @@ def _summarize_width2_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[
     by_evaluation = Counter(_width2_key(r) for r in evaluated)
     by_selected = Counter(_width2_key(r) for r in selected)
     by_budget = Counter(_width2_key(r) for r in blocked_by_budget)
-    replacement_rows = [r for r in width2_rows if str(r.get("replacement_benefit", "")).strip() != ""]
+    replacement_rows = [
+        r for r in width2_rows
+        if str(r.get("replacement_benefit_raw", r.get("replacement_benefit", ""))).strip() != ""
+    ]
     by_replacement = Counter(
         _width2_key(r)
-        for r in sorted(replacement_rows, key=lambda row: _as_float(row.get("replacement_benefit")), reverse=True)[:5]
+        for r in sorted(
+            replacement_rows,
+            key=lambda row: _as_float(row.get("replacement_benefit_raw", row.get("replacement_benefit"))),
+            reverse=True,
+        )[:5]
     )
     per_round: Dict[str, Dict[str, str]] = {}
     for row in trace_rows:
