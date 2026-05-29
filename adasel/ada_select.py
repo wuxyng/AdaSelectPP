@@ -217,6 +217,7 @@ class AdaSelect:
         self._last_decision_stats: Dict[str, float] = {}
         self._last_wdcg_score_map: Dict[IndexKey, float] = {}
         self._last_wdcg_stats: Dict[str, Any] = {}
+        self._last_structural_pair_replacement_map: Dict[IndexKey, Dict[str, Any]] = {}
         self._last_deadzone_stats: Dict[str, Any] = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
     # ------------------------------------------------------------------
@@ -390,7 +391,107 @@ class AdaSelect:
         self._last_decision_stats = {}
         self._last_wdcg_score_map = {}
         self._last_wdcg_stats = {}
+        self._last_structural_pair_replacement_map = {}
         self._last_deadzone_stats = {"deadzone_old_support": 0, "deadzone_blocked": 0}
+
+    @staticmethod
+    def _fmt_index_key(key: IndexKey) -> str:
+        return f"{key[0]}({','.join(key[1])})"
+
+    def _candidate_meta_map(self) -> Dict[IndexKey, Dict[str, Any]]:
+        try:
+            _gen = getattr(self, "_wdcg_gen", None)
+            meta = getattr(getattr(_gen, "enum", None), "last_meta", None)
+            if isinstance(meta, dict):
+                return meta
+        except Exception:
+            pass
+        return {}
+
+    def _structural_pair_type(self, key: IndexKey, meta_map: Optional[Dict[IndexKey, Dict[str, Any]]] = None) -> str:
+        if len(key[1]) != 2:
+            return ""
+        meta_map = meta_map if isinstance(meta_map, dict) else self._candidate_meta_map()
+        meta = meta_map.get(key, {}) if isinstance(meta_map, dict) else {}
+        family = str(meta.get("family", "") or "") if isinstance(meta, dict) else ""
+        explicit_type = str(meta.get("structural_pair_type", "") or "") if isinstance(meta, dict) else ""
+        if explicit_type:
+            return explicit_type
+        seed_key = meta.get("seed_key", None) if isinstance(meta, dict) else None
+        seed_family = ""
+        if isinstance(seed_key, tuple) and len(seed_key) == 2 and isinstance(seed_key[1], tuple):
+            seed_meta = meta_map.get(seed_key, {}) if isinstance(meta_map, dict) else {}
+            if isinstance(seed_meta, dict):
+                seed_family = str(seed_meta.get("family", "") or "")
+        if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
+            return "JOIN_RANGE"
+        if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
+            return "JOIN_EQ"
+        return family
+
+    def _is_structural_pair_candidate(
+        self,
+        key: IndexKey,
+        old_conf: Set[IndexKey],
+        meta_map: Optional[Dict[IndexKey, Dict[str, Any]]] = None,
+    ) -> bool:
+        if len(key[1]) != 2 or key in old_conf:
+            return False
+        meta_map = meta_map if isinstance(meta_map, dict) else self._candidate_meta_map()
+        meta = meta_map.get(key, {}) if isinstance(meta_map, dict) else {}
+        family = str(meta.get("family", "") or "") if isinstance(meta, dict) else ""
+        if family and family not in {"EQ_RANGE", "EQ_EQ", "JOIN_RANGE", "JOIN_EQ"}:
+            return False
+        grow_reason = str(meta.get("grow_reason", "") or "") if isinstance(meta, dict) else ""
+        pair_type = self._structural_pair_type(key, meta_map)
+        return (
+            pair_type in {"JOIN_RANGE", "EQ_RANGE", "JOIN_EQ", "EQ_EQ"}
+            or grow_reason in {"seed_eq_plus_range", "seed_eq_plus_eq", "JOIN_RANGE", "JOIN_EQ"}
+            or family in {"EQ_RANGE", "EQ_EQ"}
+        )
+
+    def _rank_structural_pair_candidates(
+        self,
+        candidates: Sequence[IndexKey],
+        meta_map: Optional[Dict[IndexKey, Dict[str, Any]]] = None,
+    ) -> List[IndexKey]:
+        meta_map = meta_map if isinstance(meta_map, dict) else self._candidate_meta_map()
+        priority = {"JOIN_RANGE": 0, "EQ_RANGE": 1, "JOIN_EQ": 2, "EQ_EQ": 3}
+
+        def _as_float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except Exception:
+                return default
+
+        def _sort_key(key: IndexKey) -> Tuple[int, float, float, float, IndexKey]:
+            meta = meta_map.get(key, {}) if isinstance(meta_map, dict) else {}
+            pair_type = self._structural_pair_type(key, meta_map)
+            seed_norm = _as_float(meta.get("seed_normalized_benefit", 0.0) if isinstance(meta, dict) else 0.0)
+            score = _as_float(self._last_wdcg_score_map.get(key, meta.get("score", 0.0) if isinstance(meta, dict) else 0.0))
+            return (priority.get(pair_type, 99), -seed_norm, -score, self._creation_cost(key), key)
+
+        return sorted(candidates, key=_sort_key)
+
+    @staticmethod
+    def _structural_pair_replacement_context(pair: IndexKey, old_conf: Set[IndexKey]) -> Dict[str, Any]:
+        table, cols = pair
+        if len(cols) != 2:
+            return {
+                "left_prefix_single": None,
+                "component_singles": tuple(),
+                "replacement_conf": set(old_conf or set()),
+            }
+        left_prefix = (table, (cols[0],))
+        component_singles = (left_prefix, (table, (cols[1],)))
+        replacement_conf = set(old_conf or set())
+        replacement_conf.discard(left_prefix)
+        replacement_conf.add(pair)
+        return {
+            "left_prefix_single": left_prefix,
+            "component_singles": component_singles,
+            "replacement_conf": replacement_conf,
+        }
 
     # ------------------------------------------------------------------
     # Core flow
@@ -636,6 +737,85 @@ class AdaSelect:
             idx_key, prev, new_benefit, delta, lam, lam_shadow, lam_policy, obs_src, hit_cnt, ok_cnt, fail_cnt,
         )
 
+    def _record_structural_pair_replacement_diagnostic(
+        self,
+        pair: IndexKey,
+        query_indexes: List[Set[IndexKey]],
+        base_costs: List[float],
+        base_total: float,
+        old_conf: Set[IndexKey],
+        workload: List[str],
+    ) -> None:
+        context = self._structural_pair_replacement_context(pair, old_conf)
+        left_prefix = context.get("left_prefix_single")
+        component_singles = tuple(context.get("component_singles", tuple()) or tuple())
+        diag: Dict[str, Any] = {
+            "left_prefix_single": left_prefix,
+            "component_singles": component_singles,
+            "left_prefix_in_old": bool(left_prefix in old_conf) if left_prefix is not None else False,
+            "left_prefix_in_new": False,
+            "left_prefix_in_candidate": False,
+            "marginal_benefit": float(self._last_obs_delta_map.get(pair, 0.0)),
+            "replacement_benefit": "",
+            "replacement_net_benefit": "",
+            "replacement_obs_src": "SKIPPED",
+        }
+        self._last_structural_pair_replacement_map[pair] = diag
+        if left_prefix is None or len(pair[1]) != 2:
+            return
+
+        tbl, cols = pair
+        disabled_left = False
+        created_pair = False
+        total_cost = 0.0
+        ok_cnt = fail_cnt = hit_cnt = 0
+        try:
+            if left_prefix in old_conf:
+                self.db_con2.disable_index(left_prefix[0], left_prefix[1])
+                disabled_left = True
+            self.db_con1.create_index(tbl, cols)
+            created_pair = True
+            for i, (q_idxs, base_cost) in enumerate(zip(query_indexes, base_costs)):
+                if pair in q_idxs or left_prefix in q_idxs:
+                    hit_cnt += 1
+                    try:
+                        total_cost += float(self.cost_eval.calculate_now_cost([workload[i]]))
+                        ok_cnt += 1
+                    except Exception as exc:
+                        logger.warning("replacement what-if failed for q%d pair=%s: %s", i, pair, exc)
+                        total_cost += float(base_cost)
+                        fail_cnt += 1
+                else:
+                    total_cost += float(base_cost)
+            replacement_benefit = float(base_total - total_cost)
+            diag["replacement_benefit"] = replacement_benefit
+            diag["replacement_net_benefit"] = replacement_benefit - float(self._creation_cost(pair))
+            if hit_cnt <= 0:
+                diag["replacement_obs_src"] = "NO_HIT"
+            elif ok_cnt <= 0:
+                diag["replacement_obs_src"] = "ALL_FALLBACK"
+            elif ok_cnt < hit_cnt:
+                diag["replacement_obs_src"] = "PARTIAL_FALLBACK"
+            else:
+                diag["replacement_obs_src"] = "OK"
+        except Exception as exc:
+            logger.warning("replacement diagnostic failed for pair=%s: %s", pair, exc)
+            diag["replacement_obs_src"] = "FAILED"
+        finally:
+            if created_pair:
+                try:
+                    self.db_con1.drop_index(tbl, cols)
+                except Exception:
+                    pass
+            if disabled_left:
+                try:
+                    self.db_con2.enable_index(left_prefix[0], left_prefix[1])
+                except Exception:
+                    pass
+        diag["replacement_hit_count"] = hit_cnt
+        diag["replacement_ok_count"] = ok_cnt
+        diag["replacement_fail_count"] = fail_cnt
+
     def _estimate_benefits(self, workload: List[str], old_conf: Set[IndexKey]) -> None:
         self._reset_round_diagnostics()
         base_costs, base_total = self._initial_costs(workload)
@@ -643,6 +823,13 @@ class AdaSelect:
         query_indexes, appearing = self._generate_and_merge_candidates(workload, old_conf=old_conf)
         self._last_appearing_set = set(appearing)
         self._m_stats["candidate_count"] += len(appearing)
+        self._last_wdcg_stats.update({
+            "structural_pair_quota": 0,
+            "structural_pair_eval_count": 0,
+            "structural_pair_eval_selected_keys": "",
+            "structural_pair_eval_budgeted_out_count": 0,
+            "structural_pair_eval_lane_enabled": 0,
+        })
         if not appearing:
             logger.info("BenefitBudget | appearing=0 base_total=%.3f", base_total)
             return
@@ -650,24 +837,47 @@ class AdaSelect:
         budget = len(appearing) if self.workload_count == 0 else max(1, int(float(self.ratio) * len(appearing)))
         # Robust log-scaled positive benefit keeps a huge winner from flattening medium positives.
         norm_benefit = self._log_positive_norm({idx: self.columns_benefit.get(idx, 0.0) for idx in appearing})
-        order = [idx for idx, _ in sorted(norm_benefit.items(), key=lambda kv: (-kv[1], kv[0]))]
-        self._last_eval_order = list(order)
+        normal_order = [idx for idx, _ in sorted(norm_benefit.items(), key=lambda kv: (-kv[1], kv[0]))]
+        meta_map = self._candidate_meta_map()
+        structural_candidates: List[IndexKey] = []
+        if str(self._last_wdcg_stats.get("gen_mode", "") or "") == "grow":
+            structural_candidates = self._rank_structural_pair_candidates(
+                [idx for idx in appearing if self._is_structural_pair_candidate(idx, old_conf, meta_map)],
+                meta_map,
+            )
+        pair_quota = 1 if budget >= 2 and structural_candidates else 0
+        selected_structural_pairs = structural_candidates[:pair_quota]
+        main_budget = max(0, budget - pair_quota)
+        main_order = [idx for idx in normal_order if idx not in set(selected_structural_pairs)]
+        eval_candidates = selected_structural_pairs + main_order[:main_budget]
+        structural_eval_count = sum(1 for idx in structural_candidates if idx in set(eval_candidates))
+        structural_budgeted_out = sum(1 for idx in structural_candidates if idx not in set(eval_candidates))
+        self._last_eval_order = list(selected_structural_pairs) + list(main_order)
+        self._last_wdcg_stats.update({
+            "structural_pair_quota": int(pair_quota),
+            "structural_pair_eval_count": int(structural_eval_count),
+            "structural_pair_eval_selected_keys": ";".join(self._fmt_index_key(k) for k in selected_structural_pairs),
+            "structural_pair_eval_budgeted_out_count": int(structural_budgeted_out),
+            "structural_pair_eval_lane_enabled": int(pair_quota > 0),
+        })
         logger.info(
-            "BenefitBudget | base_total=%.3f appearing=%d budget=%d eval_order_top=%s",
-            base_total, len(appearing), budget, order[: self.log_candidate_sample],
+            "BenefitBudget | base_total=%.3f appearing=%d budget=%d structural_pair_quota=%d eval_order_top=%s",
+            base_total, len(appearing), budget, pair_quota, self._last_eval_order[: self.log_candidate_sample],
         )
         trials = 0
         before_whatif = int(self._m_stats["what_if_calls"])
-        for idx in order:
-            if trials >= budget:
-                break
+        for idx in eval_candidates:
             self._test_candidate(idx, query_indexes, base_costs, base_total, old_conf, workload)
             self._last_evaluated_set.add(idx)
             trials += 1
+            if idx in selected_structural_pairs:
+                self._record_structural_pair_replacement_diagnostic(
+                    idx, query_indexes, base_costs, base_total, old_conf, workload
+                )
         self._m_stats["evaluated_count"] += trials
         logger.info(
-            "BenefitEval | evaluated=%d what_if_u=%d what_if_total=%d evaluated_top=%s",
-            trials, int(self._m_stats["what_if_calls"]) - before_whatif, int(self._m_stats["what_if_calls"]), list(self._last_evaluated_set)[: self.log_candidate_sample],
+            "BenefitEval | evaluated=%d what_if_u=%d what_if_total=%d structural_pair_eval_count=%d evaluated_top=%s",
+            trials, int(self._m_stats["what_if_calls"]) - before_whatif, int(self._m_stats["what_if_calls"]), structural_eval_count, list(self._last_evaluated_set)[: self.log_candidate_sample],
         )
 
         for key in list(self.columns_benefit.keys()):
@@ -735,6 +945,12 @@ class AdaSelect:
                     ratio = float("inf")
                 selected_conf = set(candidate_conf) if ratio > self.beta else set(old_canon)
         self._last_final_conf = set(selected_conf)
+        for diag in getattr(self, "_last_structural_pair_replacement_map", {}).values():
+            if not isinstance(diag, dict):
+                continue
+            left_prefix = diag.get("left_prefix_single", None)
+            diag["left_prefix_in_new"] = bool(left_prefix in selected_conf) if left_prefix is not None else False
+            diag["left_prefix_in_candidate"] = bool(left_prefix in candidate_conf) if left_prefix is not None else False
         self._last_decision_stats = {
             "old_benefit": float(old_benefit),
             "new_benefit": float(new_benefit),

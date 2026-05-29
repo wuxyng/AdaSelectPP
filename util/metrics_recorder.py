@@ -122,6 +122,11 @@ class MetricsRecorder:
         "wdcg_skipped_dominated",
         "coverage_boost_added",
         "wdcg_warmup_active",
+        "structural_pair_quota",
+        "structural_pair_eval_count",
+        "structural_pair_eval_selected_keys",
+        "structural_pair_eval_budgeted_out_count",
+        "structural_pair_eval_lane_enabled",
         # Diagnostics: per-index query impact (aff) statistics
         "aff_avg",
         "aff_p90",
