@@ -382,6 +382,12 @@ class AdaSelect:
         denom = math.log1p(scale)
         return {k: math.log1p(v) / denom for k, v in positives.items()}
 
+    @staticmethod
+    def _log_positive_norm_value(value: float, scale: float) -> float:
+        if float(scale) <= 0.0:
+            return 0.0
+        return math.log1p(max(0.0, float(value))) / math.log1p(float(scale))
+
     def _creation_cost(self, key: IndexKey) -> float:
         if hasattr(self.benefit_norm, "creation_cost_for"):
             return float(self.benefit_norm.creation_cost_for(key[0], tuple(key[1]), DEFAULT_COST))
@@ -892,15 +898,8 @@ class AdaSelect:
     ) -> Dict[str, Any]:
         creation_cost = float(self._creation_cost(key))
         raw_benefit = float(self.columns_benefit.get(key, 0.0) or 0.0)
-        utility_source = "pre_cost_normalized_benefit"
-        if key in norm_map:
-            normalized_benefit = float(norm_map.get(key, 0.0) or 0.0)
-        elif key in net_map:
-            normalized_benefit = float(net_map.get(key, 0.0) or 0.0) + creation_cost
-            utility_source = "reconstructed_from_net_plus_cost"
-        else:
-            normalized_benefit = 0.0
-            utility_source = "missing_benefit"
+        normalized_benefit = self._log_positive_norm_value(raw_benefit, utility_scale_basis)
+        utility_source = "raw_benefit_shared_log_scale"
         transition_cost = creation_cost
         utility = float(normalized_benefit) - float(transition_cost)
         return {
@@ -939,13 +938,10 @@ class AdaSelect:
         if replacement_net <= 0.0:
             return None
         try:
-            normalized_benefit = float(diag.get("replacement_normalized_benefit", 0.0) or 0.0)
-        except Exception:
-            normalized_benefit = 0.0
-        try:
             raw_benefit = float(diag.get("replacement_benefit_raw", diag.get("replacement_benefit", 0.0)) or 0.0)
         except Exception:
             raw_benefit = 0.0
+        normalized_benefit = self._log_positive_norm_value(raw_benefit, utility_scale_basis)
         try:
             transition_cost = float(diag.get("replacement_creation_cost", self._creation_cost(pair)) or 0.0)
         except Exception:
@@ -959,13 +955,14 @@ class AdaSelect:
             "action_key": f"REPLACE:{self._fmt_index_key(left_prefix)}->{self._fmt_index_key(pair)}",
             "action_benefit_raw": raw_benefit,
             "action_normalized_benefit": normalized_benefit,
+            "replacement_normalized_benefit_original": diag.get("replacement_normalized_benefit", ""),
             "action_transition_cost": transition_cost,
             "action_normalized_transition_cost": transition_cost,
             "action_utility": utility,
             "benefit_weight": 1.0,
             "transition_weight": 1.0,
             "utility_scale_basis": float(utility_scale_basis),
-            "utility_source": "replacement_normalized_benefit",
+            "utility_source": "replacement_raw_shared_log_scale",
             "alpha_context": float(getattr(self, "alpha_init", 0.0)),
             "beta_context": float(getattr(self, "beta", 0.0)),
         }
@@ -1035,26 +1032,33 @@ class AdaSelect:
                 continue
             next_conf = set(s_shadow)
             applied_action = dict(action)
+            stale_converted_to_add = False
+            applied_as_replace = False
             if action.get("action_type") == "REPLACE":
                 prefix = action.get("left_prefix_single")
                 if prefix in next_conf:
                     next_conf.remove(prefix)
                     next_conf.add(idx)
-                    stats["naive_replacement_count"] += 1
+                    applied_as_replace = True
                 else:
                     next_conf.add(idx)
-                    stats["naive_add_count"] += 1
-                    stats["naive_prefix_missing_add_count"] += 1
+                    stale_converted_to_add = True
                     applied_action["stale_replacement_converted_to_add"] = 1
             elif action.get("action_type") == "ADD":
                 next_conf.add(idx)
-                stats["naive_add_count"] += 1
             else:
                 continue
             if len(next_conf) > int(self.max_num):
                 continue
             s_shadow = next_conf
             applied.append(applied_action)
+            if applied_as_replace:
+                stats["naive_replacement_count"] += 1
+            elif stale_converted_to_add:
+                stats["naive_add_count"] += 1
+                stats["naive_prefix_missing_add_count"] += 1
+            elif action.get("action_type") == "ADD":
+                stats["naive_add_count"] += 1
         stats["naive_pair_count"] = sum(1 for key in s_shadow if len(key[1]) == 2)
         return s_shadow, applied, stats
 
@@ -1081,18 +1085,20 @@ class AdaSelect:
                     continue
                 next_conf.remove(prefix)
                 next_conf.add(idx)
-                stats["shadow_transition_add_count"] += 1
-                stats["shadow_transition_drop_count"] += 1
-                stats["shadow_replacement_count"] += 1
             elif action.get("action_type") == "ADD":
                 next_conf.add(idx)
-                stats["shadow_transition_add_count"] += 1
             else:
                 continue
             if len(next_conf) > int(self.max_num):
                 continue
             s_shadow = next_conf
             applied.append(dict(action))
+            if action.get("action_type") == "REPLACE":
+                stats["shadow_transition_add_count"] += 1
+                stats["shadow_transition_drop_count"] += 1
+                stats["shadow_replacement_count"] += 1
+            elif action.get("action_type") == "ADD":
+                stats["shadow_transition_add_count"] += 1
         stats["shadow_transition_action_count"] = len(applied)
         stats["shadow_pair_count"] = sum(1 for key in s_shadow if len(key[1]) == 2)
         return s_shadow, applied, stats
