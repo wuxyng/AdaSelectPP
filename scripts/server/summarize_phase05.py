@@ -28,6 +28,25 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "structural_pair_eval_count",
     "structural_pair_eval_budgeted_out_count",
     "structural_pair_eval_lane_enabled",
+    "shadow_action_count",
+    "shadow_add_action_count",
+    "shadow_replace_action_count",
+    "naive_replacement_count",
+    "naive_add_count",
+    "naive_prefix_missing_add_count",
+    "naive_pair_count",
+    "stale_prefix_missing_count",
+    "shadow_transition_add_count",
+    "shadow_transition_drop_count",
+    "shadow_transition_action_count",
+    "shadow_pair_count",
+    "shadow_replacement_count",
+    "shadow_diff_from_active_count",
+    "shadow_diff_from_candidate_count",
+    "shadow_contains_lineitem_l_partkey_l_shipdate",
+    "shadow_contains_orders_o_custkey_o_orderdate",
+    "shadow_naive_vs_conflict_action_diff_count",
+    "shadow_naive_vs_conflict_config_diff_count",
 )
 
 TOTAL_COLUMNS: Sequence[str] = (
@@ -221,6 +240,50 @@ def _summarize_width2_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[
     ]
 
 
+def _summarize_shadow_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[str]:
+    if trace_rows is None:
+        return ["- shadow_trace: unavailable"]
+    action_rows = [r for r in trace_rows if str(r.get("shadow_action_key", "")).strip()]
+    add_rows = [r for r in action_rows if str(r.get("shadow_action_type", "")).strip() == "ADD"]
+    replace_rows = [r for r in action_rows if str(r.get("shadow_action_type", "")).strip() == "REPLACE"]
+
+    def _top_actions(rows: List[Dict[str, str]], limit: int = 5) -> str:
+        if not rows:
+            return "none"
+        # Deduplicate by round+action to avoid repeated trace rows when the same index is logged more than once.
+        seen = set()
+        deduped: List[Dict[str, str]] = []
+        for row in rows:
+            key = (str(row.get("round", "")), str(row.get("shadow_action_key", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+        top = sorted(deduped, key=lambda row: _as_float(row.get("shadow_action_utility")), reverse=True)[:limit]
+        return ", ".join(
+            f"{row.get('shadow_action_key')}={_fmt(_as_float(row.get('shadow_action_utility')))}"
+            for row in top
+        ) or "none"
+
+    per_round: Dict[str, Dict[str, str]] = {}
+    for row in trace_rows:
+        rid = str(row.get("round", "")).strip()
+        if rid and rid not in per_round:
+            per_round[rid] = row
+
+    return [
+        f"- shadow_action_rows: {len(action_rows)}",
+        f"- shadow_add_action_rows: {len(add_rows)}",
+        f"- shadow_replace_action_rows: {len(replace_rows)}",
+        f"- top_shadow_add_actions: {_top_actions(add_rows)}",
+        f"- top_shadow_replace_actions: {_top_actions(replace_rows)}",
+        f"- shadow_naive_vs_conflict_action_diff_total: {sum(_as_int(r.get('shadow_naive_vs_conflict_action_diff_count')) for r in per_round.values())}",
+        f"- shadow_naive_vs_conflict_config_diff_total: {sum(_as_int(r.get('shadow_naive_vs_conflict_config_diff_count')) for r in per_round.values())}",
+        f"- shadow_contains_lineitem_l_partkey_l_shipdate_rounds: {sum(1 for r in per_round.values() if _truthy(r.get('shadow_contains_lineitem_l_partkey_l_shipdate')))}",
+        f"- shadow_contains_orders_o_custkey_o_orderdate_rounds: {sum(1 for r in per_round.values() if _truthy(r.get('shadow_contains_orders_o_custkey_o_orderdate')))}",
+    ]
+
+
 def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]], trace_rows: Optional[List[Dict[str, str]]] = None) -> List[str]:
     warnings: List[str] = []
     total_rounds = len(rows)
@@ -275,6 +338,13 @@ def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]], trace
         vals = [_as_float(r.get(col)) for r in rows]
         lines.append(f"- {col}_total: {_fmt(sum(vals))}")
     lines.extend(_summarize_width2_trace(trace_rows))
+    lines.extend(_summarize_shadow_trace(trace_rows))
+    top_add = Counter(str(r.get("shadow_top_add_actions", "")).strip() for r in rows if str(r.get("shadow_top_add_actions", "")).strip())
+    top_replace = Counter(str(r.get("shadow_top_replace_actions", "")).strip() for r in rows if str(r.get("shadow_top_replace_actions", "")).strip())
+    if top_add:
+        lines.append(f"- common_shadow_top_add_action_sets: {_top_counter(top_add, limit=3)}")
+    if top_replace:
+        lines.append(f"- common_shadow_top_replace_action_sets: {_top_counter(top_replace, limit=3)}")
 
     if warnings:
         lines.append("- warnings:")
