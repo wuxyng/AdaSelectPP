@@ -225,6 +225,7 @@ class AdaSelect:
         self._last_wdcg_score_map: Dict[IndexKey, float] = {}
         self._last_wdcg_stats: Dict[str, Any] = {}
         self._last_structural_pair_replacement_map: Dict[IndexKey, Dict[str, Any]] = {}
+        self._last_shadow_action_rows: List[Dict[str, Any]] = []
         self._last_deadzone_stats: Dict[str, Any] = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
     # ------------------------------------------------------------------
@@ -381,6 +382,12 @@ class AdaSelect:
         denom = math.log1p(scale)
         return {k: math.log1p(v) / denom for k, v in positives.items()}
 
+    @staticmethod
+    def _log_positive_norm_value(value: float, scale: float) -> float:
+        if float(scale) <= 0.0:
+            return 0.0
+        return math.log1p(max(0.0, float(value))) / math.log1p(float(scale))
+
     def _creation_cost(self, key: IndexKey) -> float:
         if hasattr(self.benefit_norm, "creation_cost_for"):
             return float(self.benefit_norm.creation_cost_for(key[0], tuple(key[1]), DEFAULT_COST))
@@ -399,11 +406,21 @@ class AdaSelect:
         self._last_wdcg_score_map = {}
         self._last_wdcg_stats = {}
         self._last_structural_pair_replacement_map = {}
+        self._last_shadow_action_rows = []
         self._last_deadzone_stats = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
     @staticmethod
     def _fmt_index_key(key: IndexKey) -> str:
         return f"{key[0]}({','.join(key[1])})"
+
+    @classmethod
+    def _fmt_config(cls, conf: Set[IndexKey]) -> str:
+        """Serialize configs with semicolon delimiters; columns already use commas."""
+        return ";".join(cls._fmt_index_key(k) for k in sorted(set(conf or set())))
+
+    @classmethod
+    def _fmt_actions(cls, actions: List[Dict[str, Any]]) -> str:
+        return "|".join(str(a.get("action_key", "")) for a in actions if str(a.get("action_key", "")))
 
     def _candidate_meta_map(self) -> Dict[IndexKey, Dict[str, Any]]:
         try:
@@ -863,6 +880,280 @@ class AdaSelect:
         self._bump_replacement_metric("replacement_fail_count", fail_cnt)
         self._bump_replacement_metric("replacement_diag_time", diag_time)
 
+    @staticmethod
+    def _shadow_action_sort_key(action: Dict[str, Any]) -> Tuple[float, str]:
+        return (-float(action.get("action_utility", 0.0) or 0.0), str(action.get("action_key", "")))
+
+    @staticmethod
+    def _shadow_action_identity(action: Dict[str, Any]) -> str:
+        return str(action.get("action_key", ""))
+
+    def _shadow_action_row_for_add(
+        self,
+        key: IndexKey,
+        *,
+        norm_map: Dict[IndexKey, float],
+        net_map: Dict[IndexKey, float],
+        utility_scale_basis: float,
+    ) -> Dict[str, Any]:
+        creation_cost = float(self._creation_cost(key))
+        raw_benefit = float(self.columns_benefit.get(key, 0.0) or 0.0)
+        normalized_benefit = self._log_positive_norm_value(raw_benefit, utility_scale_basis)
+        utility_source = "raw_benefit_shared_log_scale"
+        transition_cost = creation_cost
+        utility = float(normalized_benefit) - float(transition_cost)
+        return {
+            "action_type": "ADD",
+            "index_key": key,
+            "left_prefix_single": "",
+            "pair_key": "",
+            "action_key": f"ADD:{self._fmt_index_key(key)}",
+            "action_benefit_raw": raw_benefit,
+            "action_normalized_benefit": normalized_benefit,
+            "action_transition_cost": transition_cost,
+            "action_normalized_transition_cost": transition_cost,
+            "action_utility": utility,
+            "benefit_weight": 1.0,
+            "transition_weight": 1.0,
+            "utility_scale_basis": float(utility_scale_basis),
+            "utility_source": utility_source,
+            "alpha_context": float(getattr(self, "alpha_init", 0.0)),
+            "beta_context": float(getattr(self, "beta", 0.0)),
+        }
+
+    def _shadow_action_row_for_replace(
+        self,
+        pair: IndexKey,
+        diag: Dict[str, Any],
+        *,
+        utility_scale_basis: float,
+    ) -> Optional[Dict[str, Any]]:
+        left_prefix = diag.get("left_prefix_single", None)
+        if not (isinstance(left_prefix, tuple) and len(left_prefix) == 2):
+            return None
+        try:
+            replacement_net = float(diag.get("replacement_net_benefit", 0.0) or 0.0)
+        except Exception:
+            replacement_net = 0.0
+        if replacement_net <= 0.0:
+            return None
+        try:
+            raw_benefit = float(diag.get("replacement_benefit_raw", diag.get("replacement_benefit", 0.0)) or 0.0)
+        except Exception:
+            raw_benefit = 0.0
+        normalized_benefit = self._log_positive_norm_value(raw_benefit, utility_scale_basis)
+        try:
+            transition_cost = float(diag.get("replacement_creation_cost", self._creation_cost(pair)) or 0.0)
+        except Exception:
+            transition_cost = float(self._creation_cost(pair))
+        utility = float(normalized_benefit) - float(transition_cost)
+        return {
+            "action_type": "REPLACE",
+            "index_key": pair,
+            "left_prefix_single": left_prefix,
+            "pair_key": pair,
+            "action_key": f"REPLACE:{self._fmt_index_key(left_prefix)}->{self._fmt_index_key(pair)}",
+            "action_benefit_raw": raw_benefit,
+            "action_normalized_benefit": normalized_benefit,
+            "replacement_normalized_benefit_original": diag.get("replacement_normalized_benefit", ""),
+            "action_transition_cost": transition_cost,
+            "action_normalized_transition_cost": transition_cost,
+            "action_utility": utility,
+            "benefit_weight": 1.0,
+            "transition_weight": 1.0,
+            "utility_scale_basis": float(utility_scale_basis),
+            "utility_source": "replacement_raw_shared_log_scale",
+            "alpha_context": float(getattr(self, "alpha_init", 0.0)),
+            "beta_context": float(getattr(self, "beta", 0.0)),
+        }
+
+    def _build_shadow_action_table(
+        self,
+        old_conf: Set[IndexKey],
+        candidate_conf: Set[IndexKey],
+        *,
+        norm_map: Optional[Dict[IndexKey, float]] = None,
+        net_map: Optional[Dict[IndexKey, float]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build shadow ADD/REPLACE actions from configuration-independent candidate generation evidence.
+
+        This is diagnostic-only: it does not create new candidates, run fresh what-if checks,
+        or feed the active selector.
+        """
+        old_canon = {_canon(k) for k in old_conf}
+        norm_map = dict(norm_map or {})
+        net_map = dict(net_map or {})
+        add_keys = set(candidate_conf or set()) | set(getattr(self, "_last_appearing_set", set()) or set()) | set(getattr(self, "_last_evaluated_set", set()) or set())
+        replacement_map = getattr(self, "_last_structural_pair_replacement_map", {}) or {}
+
+        scale_values = [max(0.0, float(v)) for v in getattr(self, "columns_benefit", {}).values()]
+        for diag in replacement_map.values():
+            if isinstance(diag, dict):
+                try:
+                    scale_values.append(max(0.0, float(diag.get("replacement_benefit_raw", diag.get("replacement_benefit", 0.0)) or 0.0)))
+                except Exception:
+                    pass
+        utility_scale_basis = max(scale_values) if scale_values else 0.0
+
+        rows: List[Dict[str, Any]] = []
+        for key in sorted(add_keys):
+            if key in old_canon:
+                continue
+            rows.append(self._shadow_action_row_for_add(
+                key,
+                norm_map=norm_map,
+                net_map=net_map,
+                utility_scale_basis=utility_scale_basis,
+            ))
+
+        for pair, diag in sorted(replacement_map.items()):
+            if pair in old_canon or not isinstance(diag, dict):
+                continue
+            row = self._shadow_action_row_for_replace(pair, diag, utility_scale_basis=utility_scale_basis)
+            if row is not None:
+                rows.append(row)
+
+        rows.sort(key=self._shadow_action_sort_key)
+        return rows
+
+    def _apply_shadow_actions_naive(self, old_conf: Set[IndexKey], actions: List[Dict[str, Any]]) -> Tuple[Set[IndexKey], List[Dict[str, Any]], Dict[str, int]]:
+        s_shadow: Set[IndexKey] = set(old_conf or set())
+        applied: List[Dict[str, Any]] = []
+        stats = {
+            "naive_replacement_count": 0,
+            "naive_add_count": 0,
+            "naive_prefix_missing_add_count": 0,
+        }
+        for action in sorted(actions, key=self._shadow_action_sort_key):
+            if float(action.get("action_utility", 0.0) or 0.0) <= 0.0 or len(applied) >= 3:
+                break
+            idx = action.get("index_key")
+            if not isinstance(idx, tuple):
+                continue
+            next_conf = set(s_shadow)
+            applied_action = dict(action)
+            stale_converted_to_add = False
+            applied_as_replace = False
+            if action.get("action_type") == "REPLACE":
+                prefix = action.get("left_prefix_single")
+                if prefix in next_conf:
+                    next_conf.remove(prefix)
+                    next_conf.add(idx)
+                    applied_as_replace = True
+                else:
+                    next_conf.add(idx)
+                    stale_converted_to_add = True
+                    applied_action["stale_replacement_converted_to_add"] = 1
+            elif action.get("action_type") == "ADD":
+                next_conf.add(idx)
+            else:
+                continue
+            if len(next_conf) > int(self.max_num):
+                continue
+            s_shadow = next_conf
+            applied.append(applied_action)
+            if applied_as_replace:
+                stats["naive_replacement_count"] += 1
+            elif stale_converted_to_add:
+                stats["naive_add_count"] += 1
+                stats["naive_prefix_missing_add_count"] += 1
+            elif action.get("action_type") == "ADD":
+                stats["naive_add_count"] += 1
+        stats["naive_pair_count"] = sum(1 for key in s_shadow if len(key[1]) == 2)
+        return s_shadow, applied, stats
+
+    def _apply_shadow_actions_conflict_aware(self, old_conf: Set[IndexKey], actions: List[Dict[str, Any]]) -> Tuple[Set[IndexKey], List[Dict[str, Any]], Dict[str, int]]:
+        s_shadow: Set[IndexKey] = set(old_conf or set())
+        applied: List[Dict[str, Any]] = []
+        stats = {
+            "stale_prefix_missing_count": 0,
+            "shadow_transition_add_count": 0,
+            "shadow_transition_drop_count": 0,
+            "shadow_replacement_count": 0,
+        }
+        for action in sorted(actions, key=self._shadow_action_sort_key):
+            if float(action.get("action_utility", 0.0) or 0.0) <= 0.0 or len(applied) >= 3:
+                break
+            idx = action.get("index_key")
+            if not isinstance(idx, tuple):
+                continue
+            next_conf = set(s_shadow)
+            if action.get("action_type") == "REPLACE":
+                prefix = action.get("left_prefix_single")
+                if prefix not in next_conf:
+                    stats["stale_prefix_missing_count"] += 1
+                    continue
+                next_conf.remove(prefix)
+                next_conf.add(idx)
+            elif action.get("action_type") == "ADD":
+                next_conf.add(idx)
+            else:
+                continue
+            if len(next_conf) > int(self.max_num):
+                continue
+            s_shadow = next_conf
+            applied.append(dict(action))
+            if action.get("action_type") == "REPLACE":
+                stats["shadow_transition_add_count"] += 1
+                stats["shadow_transition_drop_count"] += 1
+                stats["shadow_replacement_count"] += 1
+            elif action.get("action_type") == "ADD":
+                stats["shadow_transition_add_count"] += 1
+        stats["shadow_transition_action_count"] = len(applied)
+        stats["shadow_pair_count"] = sum(1 for key in s_shadow if len(key[1]) == 2)
+        return s_shadow, applied, stats
+
+    def _record_shadow_action_greedy_diagnostic(
+        self,
+        old_conf: Set[IndexKey],
+        candidate_conf: Set[IndexKey],
+        selected_conf: Set[IndexKey],
+        *,
+        norm_map: Dict[IndexKey, float],
+        net_map: Dict[IndexKey, float],
+    ) -> None:
+        if not isinstance(getattr(self, "_last_wdcg_stats", None), dict):
+            self._last_wdcg_stats = {}
+        actions = self._build_shadow_action_table(old_conf, candidate_conf, norm_map=norm_map, net_map=net_map)
+        naive_conf, naive_actions, naive_stats = self._apply_shadow_actions_naive(old_conf, actions)
+        conflict_conf, conflict_actions, conflict_stats = self._apply_shadow_actions_conflict_aware(old_conf, actions)
+
+        naive_action_keys = {self._shadow_action_identity(a) for a in naive_actions}
+        conflict_action_keys = {self._shadow_action_identity(a) for a in conflict_actions}
+        naive_only = sorted(naive_action_keys - conflict_action_keys)
+        conflict_only = sorted(conflict_action_keys - naive_action_keys)
+
+        add_actions = [a for a in actions if a.get("action_type") == "ADD"]
+        replace_actions = [a for a in actions if a.get("action_type") == "REPLACE"]
+        top_add = sorted(add_actions, key=self._shadow_action_sort_key)[:5]
+        top_replace = sorted(replace_actions, key=self._shadow_action_sort_key)[:5]
+
+        stats: Dict[str, Any] = {
+            "shadow_action_count": len(actions),
+            "shadow_add_action_count": len(add_actions),
+            "shadow_replace_action_count": len(replace_actions),
+            "shadow_top_add_actions": self._fmt_actions(top_add),
+            "shadow_top_replace_actions": self._fmt_actions(top_replace),
+            "shadow_greedy_config_naive": self._fmt_config(naive_conf),
+            "shadow_greedy_actions_naive": self._fmt_actions(naive_actions),
+            "shadow_greedy_config_conflict_aware": self._fmt_config(conflict_conf),
+            "shadow_greedy_actions_conflict_aware": self._fmt_actions(conflict_actions),
+            "shadow_greedy_config_stale": self._fmt_config(conflict_conf),
+            "shadow_greedy_actions_stale": self._fmt_actions(conflict_actions),
+            "shadow_naive_vs_conflict_action_diff_count": len(naive_action_keys.symmetric_difference(conflict_action_keys)),
+            "shadow_naive_vs_conflict_config_diff_count": len(set(naive_conf).symmetric_difference(set(conflict_conf))),
+            "shadow_naive_only_actions": "|".join(naive_only),
+            "shadow_conflict_aware_only_actions": "|".join(conflict_only),
+            "shadow_diff_from_active_count": len(set(conflict_conf).symmetric_difference(set(selected_conf or set()))),
+            "shadow_diff_from_candidate_count": len(set(conflict_conf).symmetric_difference(set(candidate_conf or set()))),
+            "shadow_contains_lineitem_l_partkey_l_shipdate": int(("lineitem", ("l_partkey", "l_shipdate")) in conflict_conf),
+            "shadow_contains_orders_o_custkey_o_orderdate": int(("orders", ("o_custkey", "o_orderdate")) in conflict_conf),
+        }
+        stats.update(naive_stats)
+        stats.update(conflict_stats)
+        self._last_shadow_action_rows = actions
+        self._last_wdcg_stats.update(stats)
+
     def _estimate_benefits(self, workload: List[str], old_conf: Set[IndexKey]) -> None:
         self._reset_round_diagnostics()
         base_costs, base_total = self._initial_costs(workload)
@@ -1004,6 +1295,13 @@ class AdaSelect:
             left_prefix = diag.get("left_prefix_single", None)
             diag["left_prefix_in_new"] = bool(left_prefix in selected_conf) if left_prefix is not None else False
             diag["left_prefix_in_candidate"] = bool(left_prefix in candidate_conf) if left_prefix is not None else False
+        self._record_shadow_action_greedy_diagnostic(
+            old_canon,
+            set(candidate_conf),
+            set(selected_conf),
+            norm_map=normalized,
+            net_map=net,
+        )
         self._last_decision_stats = {
             "old_benefit": float(old_benefit),
             "new_benefit": float(new_benefit),
