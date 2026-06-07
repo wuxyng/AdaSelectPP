@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -60,6 +61,8 @@ def _tuner():
 
 def test_shadow_starts_from_old_conf_and_replaces_only_left_prefix():
     tuner = _tuner()
+    tuner._last_appearing_set = set()
+    tuner._last_evaluated_set = set()
 
     tuner._record_shadow_action_greedy_diagnostic(
         old_conf={A, B},
@@ -93,6 +96,8 @@ def test_second_component_single_is_not_removed_by_replace():
 
 def test_naive_converts_missing_prefix_replace_into_stale_add():
     tuner = _tuner()
+    tuner._last_appearing_set = set()
+    tuner._last_evaluated_set = set()
     actions = tuner._build_shadow_action_table({B}, set(), norm_map={}, net_map={})
 
     naive_conf, naive_actions, naive_stats = tuner._apply_shadow_actions_naive({B}, actions)
@@ -117,7 +122,8 @@ def test_two_replacements_competing_for_same_prefix_diverge():
         "replacement_creation_cost": 0.12,
         "replacement_net_benefit": 0.67,
     }
-    tuner._last_appearing_set = {PAIR_AB, PAIR_AC}
+    tuner._last_appearing_set = set()
+    tuner._last_evaluated_set = set()
     actions = tuner._build_shadow_action_table({A}, set(), norm_map={}, net_map={})
 
     naive_conf, naive_actions, _ = tuner._apply_shadow_actions_naive({A}, actions)
@@ -149,20 +155,22 @@ def test_alpha_beta_are_context_not_utility_weights():
     assert row["beta_context"] == 100.0
     assert row["benefit_weight"] == 1.0
     assert row["transition_weight"] == 1.0
-    assert row["action_utility"] == pytest.approx(0.80 - 0.13)
+    assert row["action_utility"] == pytest.approx(math.log1p(30.0) / math.log1p(100.0) - 0.13)
 
 
-def test_replace_uses_gross_normalized_benefit_not_replacement_net_as_benefit():
+def test_replace_uses_gross_raw_benefit_on_shared_scale_not_replacement_net_as_benefit():
     tuner = _tuner()
     row = tuner._shadow_action_row_for_replace(PAIR_AB, tuner._last_structural_pair_replacement_map[PAIR_AB], utility_scale_basis=100.0)
+    expected = math.log1p(30.0) / math.log1p(100.0)
 
-    assert row["action_normalized_benefit"] == 0.80
+    assert row["action_normalized_benefit"] == pytest.approx(expected)
     assert row["action_normalized_benefit"] != tuner._last_structural_pair_replacement_map[PAIR_AB]["replacement_net_benefit"]
-    assert row["action_utility"] == pytest.approx(0.80 - 0.13)
+    assert row["action_normalized_benefit"] != tuner._last_structural_pair_replacement_map[PAIR_AB]["replacement_normalized_benefit"]
+    assert row["action_utility"] == pytest.approx(expected - 0.13)
     assert row["action_utility"] != pytest.approx(0.67 - 0.13)
 
 
-def test_add_gross_reconstruction_from_net_plus_cost():
+def test_add_gross_benefit_uses_raw_benefit_on_shared_scale():
     tuner = _tuner()
     row = tuner._shadow_action_row_for_add(
         ADD_D,
@@ -170,10 +178,33 @@ def test_add_gross_reconstruction_from_net_plus_cost():
         net_map={ADD_D: 0.23},
         utility_scale_basis=100.0,
     )
+    expected = math.log1p(50.0) / math.log1p(100.0)
 
-    assert row["utility_source"] == "reconstructed_from_net_plus_cost"
-    assert row["action_normalized_benefit"] == pytest.approx(0.33)
-    assert row["action_utility"] == pytest.approx(0.33 - 0.10)
+    assert row["utility_source"] == "raw_benefit_shared_log_scale"
+    assert row["action_benefit_raw"] == 50.0
+    assert row["action_normalized_benefit"] == pytest.approx(expected)
+    assert row["action_utility"] == pytest.approx(expected - 0.10)
+
+
+def test_add_and_replace_normalize_with_same_shared_basis_from_raw_benefits():
+    tuner = _tuner()
+    tuner.columns_benefit = {ADD_D: 9.0}
+    tuner._last_appearing_set = {ADD_D, PAIR_AB}
+    tuner._last_evaluated_set = {PAIR_AB}
+    tuner._last_structural_pair_replacement_map[PAIR_AB]["replacement_benefit_raw"] = 999.0
+    tuner._last_structural_pair_replacement_map[PAIR_AB]["replacement_normalized_benefit"] = 0.42
+    tuner._last_structural_pair_replacement_map[PAIR_AB]["replacement_net_benefit"] = 0.29
+
+    rows = tuner._build_shadow_action_table({A}, {ADD_D}, norm_map={ADD_D: 1.0}, net_map={})
+    add_row = next(row for row in rows if row["action_type"] == "ADD" and row["index_key"] == ADD_D)
+    replace_row = next(row for row in rows if row["action_type"] == "REPLACE" and row["index_key"] == PAIR_AB)
+    shared_basis = replace_row["utility_scale_basis"]
+
+    assert add_row["utility_scale_basis"] == shared_basis
+    assert shared_basis == 999.0
+    assert replace_row["action_normalized_benefit"] == pytest.approx(1.0)
+    assert add_row["action_normalized_benefit"] < 1.0
+    assert add_row["action_normalized_benefit"] == pytest.approx(math.log1p(9.0) / math.log1p(shared_basis))
 
 
 def test_keep_rows_are_not_part_of_greedy_apply_loop():
@@ -184,6 +215,40 @@ def test_keep_rows_are_not_part_of_greedy_apply_loop():
     assert all(a["action_type"] != "KEEP" for a in actions)
     assert all(a["action_type"] != "KEEP" for a in naive_actions)
     assert B in naive_conf
+
+
+def test_full_capacity_add_is_skipped_without_incrementing_counters():
+    tuner = _tuner()
+    tuner.max_num = 1
+    action = tuner._shadow_action_row_for_add(ADD_D, norm_map={}, net_map={}, utility_scale_basis=100.0)
+
+    naive_conf, naive_actions, naive_stats = tuner._apply_shadow_actions_naive({A}, [action])
+    conflict_conf, conflict_actions, conflict_stats = tuner._apply_shadow_actions_conflict_aware({A}, [action])
+
+    assert naive_conf == {A}
+    assert conflict_conf == {A}
+    assert naive_actions == []
+    assert conflict_actions == []
+    assert naive_stats["naive_add_count"] == 0
+    assert conflict_stats["shadow_transition_add_count"] == 0
+
+
+def test_full_capacity_naive_missing_prefix_replace_is_not_counted_as_add():
+    tuner = _tuner()
+    tuner.max_num = 1
+    action = tuner._shadow_action_row_for_replace(
+        PAIR_AB,
+        tuner._last_structural_pair_replacement_map[PAIR_AB],
+        utility_scale_basis=100.0,
+    )
+
+    naive_conf, naive_actions, naive_stats = tuner._apply_shadow_actions_naive({B}, [action])
+
+    assert naive_conf == {B}
+    assert naive_actions == []
+    assert PAIR_AB not in naive_conf
+    assert naive_stats["naive_prefix_missing_add_count"] == 0
+    assert naive_stats["naive_add_count"] == 0
 
 
 def test_choose_config_active_selected_conf_remains_unchanged_by_shadow_replacement():
