@@ -168,6 +168,44 @@ class TraceRecorder:
         "structural_pair_eval_selected_keys",
         "structural_pair_eval_budgeted_out_count",
         "structural_pair_eval_lane_enabled",
+        "shadow_action_key",
+        "shadow_action_type",
+        "shadow_action_normalized_benefit",
+        "shadow_action_transition_cost",
+        "shadow_action_utility",
+        "shadow_action_utility_source",
+        "shadow_action_utility_scale_basis",
+        "shadow_action_in_naive",
+        "shadow_action_in_conflict_aware",
+        "shadow_action_count",
+        "shadow_add_action_count",
+        "shadow_replace_action_count",
+        "shadow_top_add_actions",
+        "shadow_top_replace_actions",
+        "shadow_greedy_config_naive",
+        "shadow_greedy_actions_naive",
+        "naive_replacement_count",
+        "naive_add_count",
+        "naive_prefix_missing_add_count",
+        "naive_pair_count",
+        "shadow_greedy_config_conflict_aware",
+        "shadow_greedy_actions_conflict_aware",
+        "shadow_greedy_config_stale",
+        "shadow_greedy_actions_stale",
+        "stale_prefix_missing_count",
+        "shadow_transition_add_count",
+        "shadow_transition_drop_count",
+        "shadow_transition_action_count",
+        "shadow_pair_count",
+        "shadow_replacement_count",
+        "shadow_diff_from_active_count",
+        "shadow_diff_from_candidate_count",
+        "shadow_contains_lineitem_l_partkey_l_shipdate",
+        "shadow_contains_orders_o_custkey_o_orderdate",
+        "shadow_naive_vs_conflict_action_diff_count",
+        "shadow_naive_vs_conflict_config_diff_count",
+        "shadow_naive_only_actions",
+        "shadow_conflict_aware_only_actions",
         # AdaSelect-only (best effort; blank for LiteSelect)
         "lambda",
         "lambda_shadow",
@@ -307,6 +345,9 @@ class TraceRecorder:
         obs_delta_map: Dict[IndexKey, Any] = {}
         obs_src_map: Dict[IndexKey, Any] = {}
         replacement_map: Dict[IndexKey, Dict[str, Any]] = {}
+        shadow_action_map: Dict[IndexKey, Dict[str, Any]] = {}
+        shadow_naive_actions: Set[str] = set()
+        shadow_conflict_actions: Set[str] = set()
         decision_stats: Dict[str, Any] = {}
         if tuner is not None:
             try:
@@ -329,6 +370,28 @@ class TraceRecorder:
                 replacement_map = getattr(tuner, "_last_structural_pair_replacement_map", {}) or {}
             except Exception:
                 replacement_map = {}
+            try:
+                shadow_rows = getattr(tuner, "_last_shadow_action_rows", []) or []
+                for action in shadow_rows:
+                    if not isinstance(action, dict):
+                        continue
+                    key = action.get("index_key", None)
+                    if isinstance(key, tuple) and key not in shadow_action_map:
+                        shadow_action_map[key] = action
+                shadow_naive_actions = {
+                    a.strip()
+                    for a in str(wdcg_stats.get("shadow_greedy_actions_naive", "") or "").split("|")
+                    if a.strip()
+                }
+                shadow_conflict_actions = {
+                    a.strip()
+                    for a in str(wdcg_stats.get("shadow_greedy_actions_conflict_aware", "") or "").split("|")
+                    if a.strip()
+                }
+            except Exception:
+                shadow_action_map = {}
+                shadow_naive_actions = set()
+                shadow_conflict_actions = set()
             try:
                 decision_stats = getattr(tuner, "_last_decision_stats", {}) or {}
             except Exception:
@@ -403,6 +466,26 @@ class TraceRecorder:
             replacement_ok_count = ""
             replacement_fail_count = ""
             replacement_diag_time = ""
+            shadow_action = shadow_action_map.get(k, {}) if isinstance(shadow_action_map, dict) else {}
+            shadow_action_key = ""
+            shadow_action_type = ""
+            shadow_action_normalized_benefit = ""
+            shadow_action_transition_cost = ""
+            shadow_action_utility = ""
+            shadow_action_utility_source = ""
+            shadow_action_utility_scale_basis = ""
+            shadow_action_in_naive = ""
+            shadow_action_in_conflict_aware = ""
+            if isinstance(shadow_action, dict) and shadow_action:
+                shadow_action_key = shadow_action.get("action_key", "")
+                shadow_action_type = shadow_action.get("action_type", "")
+                shadow_action_normalized_benefit = shadow_action.get("action_normalized_benefit", "")
+                shadow_action_transition_cost = shadow_action.get("action_normalized_transition_cost", shadow_action.get("action_transition_cost", ""))
+                shadow_action_utility = shadow_action.get("action_utility", "")
+                shadow_action_utility_source = shadow_action.get("utility_source", "")
+                shadow_action_utility_scale_basis = shadow_action.get("utility_scale_basis", "")
+                shadow_action_in_naive = 1 if shadow_action_key in shadow_naive_actions else 0
+                shadow_action_in_conflict_aware = 1 if shadow_action_key in shadow_conflict_actions else 0
             if len(k[1]) == 2:
                 try:
                     covered = ";".join(_fmt_index_key(x) for x in covered_prefix_singles(k, set(old_conf), candidate))
@@ -555,6 +638,44 @@ class TraceRecorder:
                 "structural_pair_eval_selected_keys": wdcg_stats.get("structural_pair_eval_selected_keys", ""),
                 "structural_pair_eval_budgeted_out_count": wdcg_stats.get("structural_pair_eval_budgeted_out_count", ""),
                 "structural_pair_eval_lane_enabled": wdcg_stats.get("structural_pair_eval_lane_enabled", ""),
+                "shadow_action_key": shadow_action_key,
+                "shadow_action_type": shadow_action_type,
+                "shadow_action_normalized_benefit": shadow_action_normalized_benefit,
+                "shadow_action_transition_cost": shadow_action_transition_cost,
+                "shadow_action_utility": shadow_action_utility,
+                "shadow_action_utility_source": shadow_action_utility_source,
+                "shadow_action_utility_scale_basis": shadow_action_utility_scale_basis,
+                "shadow_action_in_naive": shadow_action_in_naive,
+                "shadow_action_in_conflict_aware": shadow_action_in_conflict_aware,
+                "shadow_action_count": wdcg_stats.get("shadow_action_count", ""),
+                "shadow_add_action_count": wdcg_stats.get("shadow_add_action_count", ""),
+                "shadow_replace_action_count": wdcg_stats.get("shadow_replace_action_count", ""),
+                "shadow_top_add_actions": wdcg_stats.get("shadow_top_add_actions", ""),
+                "shadow_top_replace_actions": wdcg_stats.get("shadow_top_replace_actions", ""),
+                "shadow_greedy_config_naive": wdcg_stats.get("shadow_greedy_config_naive", ""),
+                "shadow_greedy_actions_naive": wdcg_stats.get("shadow_greedy_actions_naive", ""),
+                "naive_replacement_count": wdcg_stats.get("naive_replacement_count", ""),
+                "naive_add_count": wdcg_stats.get("naive_add_count", ""),
+                "naive_prefix_missing_add_count": wdcg_stats.get("naive_prefix_missing_add_count", ""),
+                "naive_pair_count": wdcg_stats.get("naive_pair_count", ""),
+                "shadow_greedy_config_conflict_aware": wdcg_stats.get("shadow_greedy_config_conflict_aware", ""),
+                "shadow_greedy_actions_conflict_aware": wdcg_stats.get("shadow_greedy_actions_conflict_aware", ""),
+                "shadow_greedy_config_stale": wdcg_stats.get("shadow_greedy_config_stale", ""),
+                "shadow_greedy_actions_stale": wdcg_stats.get("shadow_greedy_actions_stale", ""),
+                "stale_prefix_missing_count": wdcg_stats.get("stale_prefix_missing_count", ""),
+                "shadow_transition_add_count": wdcg_stats.get("shadow_transition_add_count", ""),
+                "shadow_transition_drop_count": wdcg_stats.get("shadow_transition_drop_count", ""),
+                "shadow_transition_action_count": wdcg_stats.get("shadow_transition_action_count", ""),
+                "shadow_pair_count": wdcg_stats.get("shadow_pair_count", ""),
+                "shadow_replacement_count": wdcg_stats.get("shadow_replacement_count", ""),
+                "shadow_diff_from_active_count": wdcg_stats.get("shadow_diff_from_active_count", ""),
+                "shadow_diff_from_candidate_count": wdcg_stats.get("shadow_diff_from_candidate_count", ""),
+                "shadow_contains_lineitem_l_partkey_l_shipdate": wdcg_stats.get("shadow_contains_lineitem_l_partkey_l_shipdate", ""),
+                "shadow_contains_orders_o_custkey_o_orderdate": wdcg_stats.get("shadow_contains_orders_o_custkey_o_orderdate", ""),
+                "shadow_naive_vs_conflict_action_diff_count": wdcg_stats.get("shadow_naive_vs_conflict_action_diff_count", ""),
+                "shadow_naive_vs_conflict_config_diff_count": wdcg_stats.get("shadow_naive_vs_conflict_config_diff_count", ""),
+                "shadow_naive_only_actions": wdcg_stats.get("shadow_naive_only_actions", ""),
+                "shadow_conflict_aware_only_actions": wdcg_stats.get("shadow_conflict_aware_only_actions", ""),
                 "lambda": lam,
                 "lambda_shadow": lam_shadow,
                 "rsfe": rsfe,

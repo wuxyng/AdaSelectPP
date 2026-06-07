@@ -453,6 +453,38 @@ def main() -> int:
             wdcg_stats = getattr(tuner, "_last_wdcg_stats", {}) or {}
         except Exception:
             wdcg_stats = {}
+        shadow_metric_keys = [
+            "shadow_action_count",
+            "shadow_add_action_count",
+            "shadow_replace_action_count",
+            "shadow_top_add_actions",
+            "shadow_top_replace_actions",
+            "shadow_greedy_config_naive",
+            "shadow_greedy_actions_naive",
+            "naive_replacement_count",
+            "naive_add_count",
+            "naive_prefix_missing_add_count",
+            "naive_pair_count",
+            "shadow_greedy_config_conflict_aware",
+            "shadow_greedy_actions_conflict_aware",
+            "shadow_greedy_config_stale",
+            "shadow_greedy_actions_stale",
+            "stale_prefix_missing_count",
+            "shadow_transition_add_count",
+            "shadow_transition_drop_count",
+            "shadow_transition_action_count",
+            "shadow_pair_count",
+            "shadow_replacement_count",
+            "shadow_diff_from_active_count",
+            "shadow_diff_from_candidate_count",
+            "shadow_contains_lineitem_l_partkey_l_shipdate",
+            "shadow_contains_orders_o_custkey_o_orderdate",
+            "shadow_naive_vs_conflict_action_diff_count",
+            "shadow_naive_vs_conflict_config_diff_count",
+            "shadow_naive_only_actions",
+            "shadow_conflict_aware_only_actions",
+        ]
+        shadow_metrics = {key: wdcg_stats.get(key, None) for key in shadow_metric_keys}
 
         # Stability: dead-zone support-gate stats (AdaSelect)
         deadzone_stats = {}
@@ -538,6 +570,7 @@ def main() -> int:
             structural_pair_eval_selected_keys=wdcg_stats.get("structural_pair_eval_selected_keys", None),
             structural_pair_eval_budgeted_out_count=wdcg_stats.get("structural_pair_eval_budgeted_out_count", None),
             structural_pair_eval_lane_enabled=wdcg_stats.get("structural_pair_eval_lane_enabled", None),
+            **shadow_metrics,
             aff_avg=wdcg_stats.get("aff_avg", None),
             aff_p90=wdcg_stats.get("aff_p90", None),
             aff_max=wdcg_stats.get("aff_max", None),
