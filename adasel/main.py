@@ -457,6 +457,8 @@ def main() -> int:
             "shadow_action_count",
             "shadow_add_action_count",
             "shadow_replace_action_count",
+            "shadow_greedy_action_count_after_dedup",
+            "shadow_duplicate_target_action_count",
             "shadow_top_add_actions",
             "shadow_top_replace_actions",
             "shadow_greedy_config_naive",

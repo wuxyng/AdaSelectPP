@@ -251,6 +251,46 @@ def test_full_capacity_naive_missing_prefix_replace_is_not_counted_as_add():
     assert naive_stats["naive_add_count"] == 0
 
 
+def test_same_pair_add_and_replace_dedup_to_one_applied_action_per_tier():
+    tuner = _tuner()
+    tuner.columns_benefit[PAIR_AB] = 30.0
+    tuner._last_appearing_set = {PAIR_AB}
+    tuner._last_evaluated_set = {PAIR_AB}
+
+    full_actions = tuner._build_shadow_action_table({A}, set(), norm_map={}, net_map={})
+    pair_actions = [a for a in full_actions if a["index_key"] == PAIR_AB]
+    deduped = tuner._dedup_actions_for_greedy(full_actions)
+    dedup_pair_actions = [a for a in deduped if a["index_key"] == PAIR_AB]
+
+    assert {a["action_type"] for a in pair_actions} == {"ADD", "REPLACE"}
+    assert len(dedup_pair_actions) == 1
+    assert dedup_pair_actions[0]["action_type"] == "REPLACE"
+
+    naive_conf, naive_actions, naive_stats = tuner._apply_shadow_actions_naive({A}, deduped)
+    conflict_conf, conflict_actions, conflict_stats = tuner._apply_shadow_actions_conflict_aware({A}, deduped)
+
+    assert sum(1 for a in naive_actions if a["index_key"] == PAIR_AB) == 1
+    assert sum(1 for a in conflict_actions if a["index_key"] == PAIR_AB) == 1
+    assert all(_apply_for_test({A}, action) != {A} for action in naive_actions)
+    assert all(_apply_for_test({A}, action) != {A} for action in conflict_actions)
+    assert naive_conf == {PAIR_AB}
+    assert conflict_conf == {PAIR_AB}
+    assert naive_stats["naive_add_count"] == 0
+    assert naive_stats["naive_replacement_count"] == 1
+    assert conflict_stats["shadow_transition_add_count"] == 1
+    assert conflict_stats["shadow_replacement_count"] == 1
+
+    tuner._record_shadow_action_greedy_diagnostic(
+        old_conf={A},
+        candidate_conf=set(),
+        selected_conf={A},
+        norm_map={},
+        net_map={},
+    )
+    assert tuner._last_wdcg_stats["shadow_duplicate_target_action_count"] >= 1
+    assert tuner._last_wdcg_stats["shadow_greedy_action_count_after_dedup"] < tuner._last_wdcg_stats["shadow_action_count"]
+
+
 def test_choose_config_active_selected_conf_remains_unchanged_by_shadow_replacement():
     tuner = _tuner()
     tuner.columns_benefit = {A: 100.0, PAIR_AB: 0.0}
@@ -295,3 +335,16 @@ def _parse_conf_for_test(text):
         cols = tuple(c.strip() for c in rest.rstrip(")").split(",") if c.strip())
         result.add((table, cols))
     return result
+
+
+def _apply_for_test(conf, action):
+    next_conf = set(conf)
+    idx = action["index_key"]
+    if action["action_type"] == "REPLACE":
+        prefix = action["left_prefix_single"]
+        if prefix in next_conf:
+            next_conf.remove(prefix)
+        next_conf.add(idx)
+    elif action["action_type"] == "ADD":
+        next_conf.add(idx)
+    return next_conf
