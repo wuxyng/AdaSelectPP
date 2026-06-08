@@ -888,6 +888,21 @@ class AdaSelect:
     def _shadow_action_identity(action: Dict[str, Any]) -> str:
         return str(action.get("action_key", ""))
 
+    @staticmethod
+    def _dedup_action_sort_key(action: Dict[str, Any]) -> Tuple[float, int, str]:
+        type_priority = 0 if str(action.get("action_type", "")) == "REPLACE" else 1
+        return (-float(action.get("action_utility", 0.0) or 0.0), type_priority, str(action.get("action_key", "")))
+
+    @classmethod
+    def _dedup_actions_for_greedy(cls, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        by_target: Dict[IndexKey, List[Dict[str, Any]]] = {}
+        for action in actions:
+            key = action.get("index_key", None)
+            if isinstance(key, tuple):
+                by_target.setdefault(key, []).append(action)
+        deduped = [sorted(group, key=cls._dedup_action_sort_key)[0] for group in by_target.values()]
+        return sorted(deduped, key=cls._shadow_action_sort_key)
+
     def _shadow_action_row_for_add(
         self,
         key: IndexKey,
@@ -1048,6 +1063,8 @@ class AdaSelect:
                 next_conf.add(idx)
             else:
                 continue
+            if next_conf == s_shadow:
+                continue
             if len(next_conf) > int(self.max_num):
                 continue
             s_shadow = next_conf
@@ -1089,6 +1106,8 @@ class AdaSelect:
                 next_conf.add(idx)
             else:
                 continue
+            if next_conf == s_shadow:
+                continue
             if len(next_conf) > int(self.max_num):
                 continue
             s_shadow = next_conf
@@ -1115,8 +1134,9 @@ class AdaSelect:
         if not isinstance(getattr(self, "_last_wdcg_stats", None), dict):
             self._last_wdcg_stats = {}
         actions = self._build_shadow_action_table(old_conf, candidate_conf, norm_map=norm_map, net_map=net_map)
-        naive_conf, naive_actions, naive_stats = self._apply_shadow_actions_naive(old_conf, actions)
-        conflict_conf, conflict_actions, conflict_stats = self._apply_shadow_actions_conflict_aware(old_conf, actions)
+        greedy_actions = self._dedup_actions_for_greedy(actions)
+        naive_conf, naive_actions, naive_stats = self._apply_shadow_actions_naive(old_conf, greedy_actions)
+        conflict_conf, conflict_actions, conflict_stats = self._apply_shadow_actions_conflict_aware(old_conf, greedy_actions)
 
         naive_action_keys = {self._shadow_action_identity(a) for a in naive_actions}
         conflict_action_keys = {self._shadow_action_identity(a) for a in conflict_actions}
@@ -1132,6 +1152,8 @@ class AdaSelect:
             "shadow_action_count": len(actions),
             "shadow_add_action_count": len(add_actions),
             "shadow_replace_action_count": len(replace_actions),
+            "shadow_greedy_action_count_after_dedup": len(greedy_actions),
+            "shadow_duplicate_target_action_count": max(0, len(actions) - len(greedy_actions)),
             "shadow_top_add_actions": self._fmt_actions(top_add),
             "shadow_top_replace_actions": self._fmt_actions(top_replace),
             "shadow_greedy_config_naive": self._fmt_config(naive_conf),
