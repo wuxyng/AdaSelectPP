@@ -107,6 +107,7 @@ class AdaSelect:
         self.ts_mad_floor_rel = 1e-6
         self.ts_sign_decay = 0.90
         self.wdcg_enabled = True
+        self.replacement_overlay_enabled = False
         self.log_candidate_sample = 12
         self.candidate_topk_factor = 4
         self.candidate_topk_min_extra = 6
@@ -225,6 +226,8 @@ class AdaSelect:
         self._last_wdcg_score_map: Dict[IndexKey, float] = {}
         self._last_wdcg_stats: Dict[str, Any] = {}
         self._last_structural_pair_replacement_map: Dict[IndexKey, Dict[str, Any]] = {}
+        self._last_structural_pair_candidate_set: Set[IndexKey] = set()
+        self._last_structural_pair_lane_set: Set[IndexKey] = set()
         self._last_shadow_action_rows: List[Dict[str, Any]] = []
         self._last_deadzone_stats: Dict[str, Any] = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
@@ -265,6 +268,11 @@ class AdaSelect:
         if self.lambda_min > self.lambda_max:
             self.lambda_min, self.lambda_max = self.lambda_max, self.lambda_min
         self.wdcg_enabled = bool(cfg.get("wdcg_enabled", self.wdcg_enabled))
+        replacement_overlay_cfg = cfg.get("replacement_overlay_enabled", self.replacement_overlay_enabled)
+        if isinstance(replacement_overlay_cfg, str):
+            self.replacement_overlay_enabled = replacement_overlay_cfg.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            self.replacement_overlay_enabled = bool(replacement_overlay_cfg)
         self.log_candidate_sample = int(cfg.get("log_candidate_sample", self.log_candidate_sample))
         self.candidate_topk_factor = int(cfg.get("candidate_topk_factor", self.candidate_topk_factor))
         self.candidate_topk_min_extra = int(cfg.get("candidate_topk_min_extra", self.candidate_topk_min_extra))
@@ -284,6 +292,7 @@ class AdaSelect:
             "rsfe_decay": self.rsfe_decay,
             "lambda_policy": self.lambda_policy,
             "wdcg_enabled": self.wdcg_enabled,
+            "replacement_overlay_enabled": self.replacement_overlay_enabled,
             "benefit_decay_fixed": self.benefit_decay_fixed,
             "candidate_topk_factor": self.candidate_topk_factor,
             "candidate_topk_min_extra": self.candidate_topk_min_extra,
@@ -406,6 +415,8 @@ class AdaSelect:
         self._last_wdcg_score_map = {}
         self._last_wdcg_stats = {}
         self._last_structural_pair_replacement_map = {}
+        self._last_structural_pair_candidate_set = set()
+        self._last_structural_pair_lane_set = set()
         self._last_shadow_action_rows = []
         self._last_deadzone_stats = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
@@ -1176,6 +1187,172 @@ class AdaSelect:
         self._last_shadow_action_rows = actions
         self._last_wdcg_stats.update(stats)
 
+    @staticmethod
+    def _left_prefix_single(pair: IndexKey) -> Optional[IndexKey]:
+        if not (isinstance(pair, tuple) and len(pair) == 2 and isinstance(pair[1], tuple) and pair[1]):
+            return None
+        return (pair[0], (pair[1][0],))
+
+    @classmethod
+    def _co_residency_count(cls, conf: Set[IndexKey]) -> int:
+        context = set(conf or set())
+        count = 0
+        for key in context:
+            if len(key[1]) < 2:
+                continue
+            prefix = cls._left_prefix_single(key)
+            if prefix in context:
+                count += 1
+        return count
+
+    def _overlay_opportunity_pairs(self, selected_conf: Set[IndexKey]) -> Set[IndexKey]:
+        selected = set(selected_conf or set())
+        pairs: Set[IndexKey] = set()
+        for pair in set(getattr(self, "_last_structural_pair_candidate_set", set()) or set()):
+            if len(pair[1]) != 2 or pair in selected:
+                continue
+            prefix = self._left_prefix_single(pair)
+            if prefix in selected:
+                pairs.add(pair)
+        return pairs
+
+    @staticmethod
+    def _first_overlay_block_reason(reasons: Set[str]) -> str:
+        for reason in (
+            "no_structural_diag_this_round",
+            "pair_not_top_ranked_in_lane",
+            "prefix_not_in_selected",
+            "pair_already_selected",
+            "capacity_exceeded",
+            "utility_nonpositive",
+            "net_nonpositive",
+        ):
+            if reason in reasons:
+                return reason
+        return ""
+
+    def _record_replacement_overlay(self, selected_conf: Set[IndexKey]) -> Set[IndexKey]:
+        before_conf = set(selected_conf or set())
+        enabled = bool(getattr(self, "replacement_overlay_enabled", False))
+        replacement_map = getattr(self, "_last_structural_pair_replacement_map", {}) or {}
+        opportunity_pairs = self._overlay_opportunity_pairs(before_conf)
+        admitted_pairs = {
+            pair for pair in opportunity_pairs
+            if pair in replacement_map and isinstance(replacement_map.get(pair), dict)
+        }
+        block_reasons: Set[str] = set()
+        if opportunity_pairs and not replacement_map:
+            block_reasons.add("no_structural_diag_this_round")
+        elif opportunity_pairs and not admitted_pairs:
+            block_reasons.add("pair_not_top_ranked_in_lane")
+
+        eligible: List[Tuple[float, float, str, Dict[str, Any]]] = []
+        if admitted_pairs:
+            replace_rows = [
+                dict(action)
+                for action in (getattr(self, "_last_shadow_action_rows", []) or [])
+                if str(action.get("action_type", "")) == "REPLACE"
+            ]
+            replace_rows_by_pair: Dict[IndexKey, Dict[str, Any]] = {}
+            for action in replace_rows:
+                pair = action.get("index_key", None)
+                if not isinstance(pair, tuple):
+                    continue
+                try:
+                    utility = float(action.get("action_utility", 0.0) or 0.0)
+                except Exception:
+                    utility = 0.0
+                previous = replace_rows_by_pair.get(pair)
+                if previous is None:
+                    replace_rows_by_pair[pair] = action
+                    continue
+                try:
+                    previous_utility = float(previous.get("action_utility", 0.0) or 0.0)
+                except Exception:
+                    previous_utility = 0.0
+                if utility > previous_utility or (
+                    utility == previous_utility
+                    and str(action.get("action_key", "")) < str(previous.get("action_key", ""))
+                ):
+                    replace_rows_by_pair[pair] = action
+
+            for pair in sorted(admitted_pairs, key=self._fmt_index_key):
+                diag = replacement_map.get(pair, {}) if isinstance(replacement_map, dict) else {}
+                try:
+                    replacement_net = float(diag.get("replacement_net_benefit", 0.0) or 0.0) if isinstance(diag, dict) else 0.0
+                except Exception:
+                    replacement_net = 0.0
+                if replacement_net <= 0.0:
+                    block_reasons.add("net_nonpositive")
+                    continue
+
+                action = replace_rows_by_pair.get(pair)
+                if action is None:
+                    block_reasons.add("utility_nonpositive")
+                    continue
+                prefix = action.get("left_prefix_single", None)
+                if not isinstance(prefix, tuple):
+                    block_reasons.add("utility_nonpositive")
+                    continue
+                try:
+                    utility = float(action.get("action_utility", 0.0) or 0.0)
+                except Exception:
+                    utility = 0.0
+                next_conf = set(before_conf)
+                if prefix not in next_conf:
+                    block_reasons.add("prefix_not_in_selected")
+                    continue
+                if pair in next_conf:
+                    block_reasons.add("pair_already_selected")
+                    continue
+                next_conf.remove(prefix)
+                next_conf.add(pair)
+                if len(next_conf) > int(self.max_num):
+                    block_reasons.add("capacity_exceeded")
+                    continue
+                if utility <= 0.0:
+                    block_reasons.add("utility_nonpositive")
+                    continue
+                eligible.append((utility, replacement_net, str(action.get("action_key", "")), action))
+
+        after_conf = set(before_conf)
+        applied_action: Optional[Dict[str, Any]] = None
+        if enabled and eligible:
+            _utility, _replacement_net, _action_key, applied_action = sorted(
+                eligible,
+                key=lambda item: (-item[0], -item[1], item[2]),
+            )[0]
+            prefix = applied_action.get("left_prefix_single")
+            pair = applied_action.get("index_key")
+            after_conf = set(before_conf)
+            after_conf.remove(prefix)
+            after_conf.add(pair)
+
+        applied_count = 1 if applied_action is not None else 0
+        diff_count = len(before_conf.symmetric_difference(after_conf))
+        selected_action = str(applied_action.get("action_key", "")) if applied_action else ""
+        pair_key = applied_action.get("index_key", None) if applied_action else None
+        prefix_key = applied_action.get("left_prefix_single", None) if applied_action else None
+        utility_value = applied_action.get("action_utility", "") if applied_action else ""
+        stats = {
+            "replacement_overlay_enabled": int(enabled),
+            "replacement_overlay_applied_count": int(applied_count),
+            "replacement_overlay_selected_action": selected_action,
+            "replacement_overlay_pair": self._fmt_index_key(pair_key) if isinstance(pair_key, tuple) else "",
+            "replacement_overlay_prefix": self._fmt_index_key(prefix_key) if isinstance(prefix_key, tuple) else "",
+            "replacement_overlay_utility": utility_value,
+            "replacement_overlay_before_conf": self._fmt_config(before_conf),
+            "replacement_overlay_after_conf": self._fmt_config(after_conf),
+            "replacement_overlay_blocked_count": 0 if applied_count else int(bool(block_reasons)),
+            "replacement_overlay_block_reason": "" if applied_count else self._first_overlay_block_reason(block_reasons),
+            "replacement_overlay_diff_from_topk_count": int(diff_count),
+            "overlay_opportunity_rounds": int(bool(opportunity_pairs)),
+            "overlay_lane_admitted_rounds": int(bool(admitted_pairs)),
+            "replacement_overlay_co_residency_count": int(self._co_residency_count(after_conf)),
+        }
+        self._last_wdcg_stats.update(stats)
+        return after_conf
+
     def _estimate_benefits(self, workload: List[str], old_conf: Set[IndexKey]) -> None:
         self._reset_round_diagnostics()
         base_costs, base_total = self._initial_costs(workload)
@@ -1211,8 +1388,10 @@ class AdaSelect:
                 [idx for idx in appearing if self._is_structural_pair_candidate(idx, old_conf, meta_map)],
                 meta_map,
             )
+        self._last_structural_pair_candidate_set = set(structural_candidates)
         pair_quota = 1 if budget >= 2 and structural_candidates else 0
         selected_structural_pairs = structural_candidates[:pair_quota]
+        self._last_structural_pair_lane_set = set(selected_structural_pairs)
         main_budget = max(0, budget - pair_quota)
         main_order = [idx for idx in normal_order if idx not in set(selected_structural_pairs)]
         eval_candidates = selected_structural_pairs + main_order[:main_budget]
@@ -1312,7 +1491,6 @@ class AdaSelect:
                 elif old_benefit < -eps and new_benefit > eps:
                     ratio = float("inf")
                 selected_conf = set(candidate_conf) if ratio > self.beta else set(old_canon)
-        self._last_final_conf = set(selected_conf)
         for diag in getattr(self, "_last_structural_pair_replacement_map", {}).values():
             if not isinstance(diag, dict):
                 continue
@@ -1326,6 +1504,13 @@ class AdaSelect:
             norm_map=normalized,
             net_map=net,
         )
+        selected_conf = self._record_replacement_overlay(set(selected_conf))
+        for diag in getattr(self, "_last_structural_pair_replacement_map", {}).values():
+            if not isinstance(diag, dict):
+                continue
+            left_prefix = diag.get("left_prefix_single", None)
+            diag["left_prefix_in_new"] = bool(left_prefix in selected_conf) if left_prefix is not None else False
+        self._last_final_conf = set(selected_conf)
         self._last_decision_stats = {
             "old_benefit": float(old_benefit),
             "new_benefit": float(new_benefit),
