@@ -1272,12 +1272,14 @@ class AdaSelect:
         self._last_net_benefit_map = dict(net)
         sorted_keys = sorted(net.items(), key=lambda x: x[1], reverse=True)
         ranked = sorted_keys[: self.max_num]
-        filtered_nonpositive_count = 0
-        if self.workload_count == 0:
-            filtered_nonpositive_count = sum(1 for _, value in ranked if float(value) <= 0.0)
-            candidate_conf = {key for key, value in ranked if float(value) > 0.0}
-        else:
-            candidate_conf = {key for key, _ in ranked}
+        filtered_nonpositive_count = sum(
+            1 for key, value in ranked
+            if key not in old_canon and float(value) <= 0.0
+        )
+        candidate_conf = {
+            key for key, value in ranked
+            if key in old_canon or float(value) > 0.0
+        }
         self._last_candidate_conf = set(candidate_conf)
         logger.info(
             "Pre-transition pick | candidate=%s filtered_nonpositive_count=%d",
