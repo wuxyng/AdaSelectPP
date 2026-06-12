@@ -49,6 +49,13 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "shadow_contains_orders_o_custkey_o_orderdate",
     "shadow_naive_vs_conflict_action_diff_count",
     "shadow_naive_vs_conflict_config_diff_count",
+    "replacement_overlay_enabled",
+    "replacement_overlay_applied_count",
+    "replacement_overlay_blocked_count",
+    "replacement_overlay_diff_from_topk_count",
+    "overlay_opportunity_rounds",
+    "overlay_lane_admitted_rounds",
+    "replacement_overlay_co_residency_count",
 )
 
 TOTAL_COLUMNS: Sequence[str] = (
@@ -288,6 +295,25 @@ def _summarize_shadow_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[
     ]
 
 
+def _summarize_overlay_metrics(rows: List[Dict[str, str]]) -> List[str]:
+    opportunity = sum(_as_int(r.get("overlay_opportunity_rounds")) for r in rows)
+    admitted = sum(_as_int(r.get("overlay_lane_admitted_rounds")) for r in rows)
+    starvation = 0.0 if opportunity <= 0 else 1.0 - (float(admitted) / float(opportunity))
+    block_reasons = Counter(
+        str(r.get("replacement_overlay_block_reason", "")).strip()
+        for r in rows
+        if str(r.get("replacement_overlay_block_reason", "")).strip()
+    )
+    return [
+        f"- replacement_overlay_applied_count_total: {_fmt(sum(_as_float(r.get('replacement_overlay_applied_count')) for r in rows))}",
+        f"- replacement_overlay_block_reason_counts: {dict(block_reasons) if block_reasons else {}}",
+        f"- overlay_opportunity_rounds: {opportunity}",
+        f"- overlay_lane_admitted_rounds: {admitted}",
+        f"- overlay_starvation_rate: {starvation:.4f}",
+        f"- replacement_overlay_co_residency_count_total: {_fmt(sum(_as_float(r.get('replacement_overlay_co_residency_count')) for r in rows))}",
+    ]
+
+
 def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]], trace_rows: Optional[List[Dict[str, str]]] = None) -> List[str]:
     warnings: List[str] = []
     total_rounds = len(rows)
@@ -341,6 +367,7 @@ def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]], trace
     for col in TOTAL_COLUMNS:
         vals = [_as_float(r.get(col)) for r in rows]
         lines.append(f"- {col}_total: {_fmt(sum(vals))}")
+    lines.extend(_summarize_overlay_metrics(rows))
     lines.extend(_summarize_width2_trace(trace_rows))
     lines.extend(_summarize_shadow_trace(trace_rows))
     top_add = Counter(str(r.get("shadow_top_add_actions", "")).strip() for r in rows if str(r.get("shadow_top_add_actions", "")).strip())

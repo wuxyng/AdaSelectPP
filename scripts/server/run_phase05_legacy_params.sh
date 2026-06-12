@@ -9,6 +9,7 @@ DRY_RUN="${DRY_RUN:-0}"
 STRICT_RANGE="${STRICT_RANGE:-0}"
 CASE_FILTER="${CASE_FILTER:-}"
 TRACE="${TRACE:-1}"
+REPLACEMENT_OVERLAY="${REPLACEMENT_OVERLAY:-0}"
 
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GIT_FULL_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -100,6 +101,7 @@ beta=$beta
 op=$op
 lambda_policy=adaptive
 wdcg_enabled=1
+replacement_overlay_enabled=$REPLACEMENT_OVERLAY
 EOF
 }
 
@@ -182,6 +184,7 @@ run_case() {
     --opratio "$op"
     --lambda_policy adaptive
     --wdcg_enabled 1
+    --replacement_overlay_enabled "$REPLACEMENT_OVERLAY"
   )
   cmd+=("${trace_args[@]}")
 

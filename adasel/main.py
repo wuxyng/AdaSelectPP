@@ -30,6 +30,7 @@ from util.metrics_recorder import MetricsRecorder
 from util.trace_recorder import TraceRecorder
 from util.logging_utils import setup_logging
 from adasel.ada_select import AdaSelect
+from adasel.config_flags import resolve_replacement_overlay_enabled
 from adaselect_pp.common import canonical_workload_line, sql_only
 
 
@@ -163,6 +164,7 @@ def parse_args() -> argparse.Namespace:
 
     # WDCG enable (Phase 0.5 funnel)
     p.add_argument("--wdcg_enabled", "--wdcg-enabled", dest="wdcg_enabled", type=int, choices=[0,1], default=None)
+    p.add_argument("--replacement_overlay_enabled", "--replacement-overlay-enabled", dest="replacement_overlay_enabled", type=int, choices=[0,1], default=None)
 
     # recorder
     p.add_argument("--osc_window", type=int, default=20)
@@ -242,6 +244,12 @@ def main() -> int:
                 fixed_lambda_mismatch = True
     if args.wdcg_enabled is not None:
         cfg_obj["wdcg_enabled"] = bool(int(args.wdcg_enabled))
+    cfg_obj["replacement_overlay_enabled"] = resolve_replacement_overlay_enabled(
+        args.replacement_overlay_enabled,
+        os.environ.get("REPLACEMENT_OVERLAY"),
+        cfg_obj.get("replacement_overlay_enabled"),
+        default=False,
+    )
     if not bool(cfg_obj.get("wdcg_enabled", True)):
         raise ValueError("wdcg_enabled=false is not supported by the active Phase 0.5 generator path")
 
@@ -486,7 +494,24 @@ def main() -> int:
             "shadow_naive_only_actions",
             "shadow_conflict_aware_only_actions",
         ]
+        overlay_metric_keys = [
+            "replacement_overlay_enabled",
+            "replacement_overlay_applied_count",
+            "replacement_overlay_selected_action",
+            "replacement_overlay_pair",
+            "replacement_overlay_prefix",
+            "replacement_overlay_utility",
+            "replacement_overlay_before_conf",
+            "replacement_overlay_after_conf",
+            "replacement_overlay_blocked_count",
+            "replacement_overlay_block_reason",
+            "replacement_overlay_diff_from_topk_count",
+            "overlay_opportunity_rounds",
+            "overlay_lane_admitted_rounds",
+            "replacement_overlay_co_residency_count",
+        ]
         shadow_metrics = {key: wdcg_stats.get(key, None) for key in shadow_metric_keys}
+        overlay_metrics = {key: wdcg_stats.get(key, None) for key in overlay_metric_keys}
 
         # Stability: dead-zone support-gate stats (AdaSelect)
         deadzone_stats = {}
@@ -573,6 +598,7 @@ def main() -> int:
             structural_pair_eval_budgeted_out_count=wdcg_stats.get("structural_pair_eval_budgeted_out_count", None),
             structural_pair_eval_lane_enabled=wdcg_stats.get("structural_pair_eval_lane_enabled", None),
             **shadow_metrics,
+            **overlay_metrics,
             aff_avg=wdcg_stats.get("aff_avg", None),
             aff_p90=wdcg_stats.get("aff_p90", None),
             aff_max=wdcg_stats.get("aff_max", None),
