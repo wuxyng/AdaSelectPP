@@ -508,10 +508,49 @@ def main() -> int:
             "replacement_overlay_diff_from_topk_count",
             "overlay_opportunity_rounds",
             "overlay_lane_admitted_rounds",
+            "overlay_opportunity_pair_count",
+            "overlay_lane_admitted_pair_count",
+            "overlay_blocked_by_lane_count",
+            "overlay_blocked_by_eligibility_count",
+            "overlay_fired_pair_count",
             "replacement_overlay_co_residency_count",
+        ]
+        supply_metric_keys = [
+            "width2_candidates_perquery_before_cap",
+            "width2_candidates_perquery_after_cap",
+            "width2_cap_dropped_perquery_events",
+            "width2_cap_dropped_perquery_by_table",
+            "width2_cap_dropped_perquery_examples",
+            "width2_candidates_round_before_cap",
+            "width2_candidates_round_after_cap",
+            "width2_cap_dropped_round",
+            "width2_cap_dropped_round_by_table",
+            "width2_cap_dropped_round_examples",
+            "width1_ranked_ahead_of_best_width2",
+            "best_width2_family_score",
+            "max_family_score_of_displacing_width1",
+            "pair_family_vs_grow_reason_mismatch",
+            "seed_family_missing_count",
+            "join_seed_downgraded_count",
+            "pair_fate_universe_count",
+            "pair_fate_dropped_perquery_cap_count",
+            "pair_fate_dropped_round_cap_count",
+            "pair_fate_generated_not_in_overlay_opportunity_count",
+            "pair_fate_in_opportunity_blocked_by_lane_count",
+            "pair_fate_lane_admitted_blocked_by_eligibility_count",
+            "pair_fate_lane_admitted_fired_count",
+            "pair_fate_not_generated_other_count",
+            "pair_fate_dropped_perquery_cap_examples",
+            "pair_fate_dropped_round_cap_examples",
+            "pair_fate_generated_not_in_overlay_opportunity_examples",
+            "pair_fate_in_opportunity_blocked_by_lane_examples",
+            "pair_fate_lane_admitted_blocked_by_eligibility_examples",
+            "pair_fate_lane_admitted_fired_examples",
+            "pair_fate_not_generated_other_examples",
         ]
         shadow_metrics = {key: wdcg_stats.get(key, None) for key in shadow_metric_keys}
         overlay_metrics = {key: wdcg_stats.get(key, None) for key in overlay_metric_keys}
+        supply_metrics = {key: wdcg_stats.get(key, None) for key in supply_metric_keys}
 
         # Stability: dead-zone support-gate stats (AdaSelect)
         deadzone_stats = {}
@@ -597,6 +636,7 @@ def main() -> int:
             structural_pair_eval_selected_keys=wdcg_stats.get("structural_pair_eval_selected_keys", None),
             structural_pair_eval_budgeted_out_count=wdcg_stats.get("structural_pair_eval_budgeted_out_count", None),
             structural_pair_eval_lane_enabled=wdcg_stats.get("structural_pair_eval_lane_enabled", None),
+            **supply_metrics,
             **shadow_metrics,
             **overlay_metrics,
             aff_avg=wdcg_stats.get("aff_avg", None),
