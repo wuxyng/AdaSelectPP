@@ -21,6 +21,18 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "evaluated_count",
     "width1_count",
     "width2_count",
+    "width2_candidates_perquery_before_cap",
+    "width2_candidates_perquery_after_cap",
+    "width2_cap_dropped_perquery_events",
+    "width2_candidates_round_before_cap",
+    "width2_candidates_round_after_cap",
+    "width2_cap_dropped_round",
+    "width1_ranked_ahead_of_best_width2",
+    "best_width2_family_score",
+    "max_family_score_of_displacing_width1",
+    "pair_family_vs_grow_reason_mismatch",
+    "seed_family_missing_count",
+    "join_seed_downgraded_count",
     "seed_count",
     "eligible_seed_count",
     "multi_growth_count",
@@ -55,6 +67,19 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "replacement_overlay_diff_from_topk_count",
     "overlay_opportunity_rounds",
     "overlay_lane_admitted_rounds",
+    "overlay_opportunity_pair_count",
+    "overlay_lane_admitted_pair_count",
+    "overlay_blocked_by_lane_count",
+    "overlay_blocked_by_eligibility_count",
+    "overlay_fired_pair_count",
+    "pair_fate_universe_count",
+    "pair_fate_dropped_perquery_cap_count",
+    "pair_fate_dropped_round_cap_count",
+    "pair_fate_generated_not_in_overlay_opportunity_count",
+    "pair_fate_in_opportunity_blocked_by_lane_count",
+    "pair_fate_lane_admitted_blocked_by_eligibility_count",
+    "pair_fate_lane_admitted_fired_count",
+    "pair_fate_not_generated_other_count",
     "replacement_overlay_co_residency_count",
 )
 
@@ -190,6 +215,56 @@ def _top_counter(counter: Counter, limit: int = 5) -> str:
     if not counter:
         return "none"
     return ", ".join(f"{name}={count}" for name, count in counter.most_common(limit))
+
+
+def _merge_table_counts(rows: List[Dict[str, str]], field: str) -> Counter:
+    counter: Counter = Counter()
+    for row in rows:
+        for item in str(row.get(field, "") or "").split("|"):
+            if ":" not in item:
+                continue
+            table, value = item.split(":", 1)
+            table = table.strip()
+            if table:
+                counter[table] += _as_int(value)
+    return counter
+
+
+def _example_counter(rows: List[Dict[str, str]], field: str) -> Counter:
+    counter: Counter = Counter()
+    for row in rows:
+        for item in str(row.get(field, "") or "").split(";"):
+            item = item.strip()
+            if item:
+                counter[item] += 1
+    return counter
+
+
+def _summarize_pair_supply_metrics(rows: List[Dict[str, str]]) -> List[str]:
+    fate_fields = [
+        "pair_fate_dropped_perquery_cap",
+        "pair_fate_dropped_round_cap",
+        "pair_fate_generated_not_in_overlay_opportunity",
+        "pair_fate_in_opportunity_blocked_by_lane",
+        "pair_fate_lane_admitted_blocked_by_eligibility",
+        "pair_fate_lane_admitted_fired",
+        "pair_fate_not_generated_other",
+    ]
+    lines = [
+        f"- width2_perquery_dropped_by_table: {_top_counter(_merge_table_counts(rows, 'width2_cap_dropped_perquery_by_table'))}",
+        f"- width2_round_dropped_by_table: {_top_counter(_merge_table_counts(rows, 'width2_cap_dropped_round_by_table'))}",
+        f"- width2_perquery_dropped_examples: {_top_counter(_example_counter(rows, 'width2_cap_dropped_perquery_examples'))}",
+        f"- width2_round_dropped_examples: {_top_counter(_example_counter(rows, 'width2_cap_dropped_round_examples'))}",
+        f"- overlay_blocked_by_lane_pair_total: {_fmt(sum(_as_float(r.get('overlay_blocked_by_lane_count')) for r in rows))}",
+        f"- overlay_blocked_by_eligibility_pair_total: {_fmt(sum(_as_float(r.get('overlay_blocked_by_eligibility_count')) for r in rows))}",
+        f"- overlay_fired_pair_total: {_fmt(sum(_as_float(r.get('overlay_fired_pair_count')) for r in rows))}",
+    ]
+    for prefix in fate_fields:
+        lines.append(f"- {prefix}_total: {_fmt(sum(_as_float(r.get(prefix + '_count')) for r in rows))}")
+        examples = _example_counter(rows, prefix + "_examples")
+        if examples:
+            lines.append(f"- {prefix}_examples: {_top_counter(examples)}")
+    return lines
 
 
 def _summarize_width2_trace(trace_rows: Optional[List[Dict[str, str]]]) -> List[str]:
@@ -368,6 +443,7 @@ def _summarize_case(name: str, csv_path: Path, rows: List[Dict[str, str]], trace
         vals = [_as_float(r.get(col)) for r in rows]
         lines.append(f"- {col}_total: {_fmt(sum(vals))}")
     lines.extend(_summarize_overlay_metrics(rows))
+    lines.extend(_summarize_pair_supply_metrics(rows))
     lines.extend(_summarize_width2_trace(trace_rows))
     lines.extend(_summarize_shadow_trace(trace_rows))
     top_add = Counter(str(r.get("shadow_top_add_actions", "")).strip() for r in rows if str(r.get("shadow_top_add_actions", "")).strip())
