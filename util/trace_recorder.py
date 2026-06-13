@@ -74,14 +74,24 @@ def _structural_pair_type(key: IndexKey, meta: Dict[str, Any], meta_map: Dict[In
         return explicit_type
     seed_key = _parse_index_key(meta.get("seed_key", ""))
     seed_meta = meta_map.get(seed_key, {}) if seed_key is not None and isinstance(meta_map, dict) else {}
-    seed_family = str(meta.get("grow_seed_family", "") or "")
-    if not seed_family:
-        seed_family = str(seed_meta.get("family", "") or "") if isinstance(seed_meta, dict) else ""
+    seed_family = str(seed_meta.get("family", "") or "") if isinstance(seed_meta, dict) else ""
     if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
         return "JOIN_RANGE"
     if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
         return "JOIN_EQ"
     return family
+
+
+def _diagnostic_structural_pair_type(key: IndexKey, meta: Dict[str, Any], meta_map: Dict[IndexKey, Any]) -> str:
+    if len(key[1]) != 2:
+        return ""
+    family = str(meta.get("family", "") or "")
+    seed_family = str(meta.get("grow_seed_family", "") or "")
+    if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
+        return "JOIN_RANGE"
+    if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
+        return "JOIN_EQ"
+    return _structural_pair_type(key, meta, meta_map)
 
 
 @dataclass
@@ -155,6 +165,8 @@ class TraceRecorder:
         "pair_fate",
         "covered_prefix_singles",
         "structural_pair_type",
+        "diagnostic_structural_pair_type",
+        "expected_structural_pair_type",
         "left_prefix_single",
         "component_singles",
         "left_prefix_in_old",
@@ -241,6 +253,7 @@ class TraceRecorder:
         "pair_fate_generated_not_in_overlay_opportunity_count",
         "pair_fate_in_opportunity_blocked_by_lane_count",
         "pair_fate_lane_admitted_blocked_by_eligibility_count",
+        "pair_fate_lane_admitted_overlay_disabled_count",
         "pair_fate_lane_admitted_fired_count",
         "pair_fate_not_generated_other_count",
         "replacement_overlay_co_residency_count",
@@ -495,6 +508,7 @@ class TraceRecorder:
 
             covered = ""
             structural_pair_type = ""
+            diagnostic_structural_pair_type = ""
             left_prefix_single = ""
             component_singles = ""
             left_prefix_in_old = ""
@@ -537,8 +551,10 @@ class TraceRecorder:
                     covered = ""
                 try:
                     structural_pair_type = _structural_pair_type(k, meta if isinstance(meta, dict) else {}, meta_map)
+                    diagnostic_structural_pair_type = _diagnostic_structural_pair_type(k, meta if isinstance(meta, dict) else {}, meta_map)
                 except Exception:
                     structural_pair_type = ""
+                    diagnostic_structural_pair_type = ""
                 repl = replacement_map.get(k, {}) if isinstance(replacement_map, dict) else {}
                 if isinstance(repl, dict):
                     lp = repl.get("left_prefix_single", None)
@@ -667,6 +683,8 @@ class TraceRecorder:
                 "pair_fate": pair_fate_map.get(k, "") if isinstance(pair_fate_map, dict) else "",
                 "covered_prefix_singles": covered,
                 "structural_pair_type": structural_pair_type,
+                "diagnostic_structural_pair_type": diagnostic_structural_pair_type,
+                "expected_structural_pair_type": meta.get("expected_structural_pair_type", "") if isinstance(meta, dict) else "",
                 "left_prefix_single": left_prefix_single,
                 "component_singles": component_singles,
                 "left_prefix_in_old": left_prefix_in_old,
@@ -753,6 +771,7 @@ class TraceRecorder:
                 "pair_fate_generated_not_in_overlay_opportunity_count": wdcg_stats.get("pair_fate_generated_not_in_overlay_opportunity_count", ""),
                 "pair_fate_in_opportunity_blocked_by_lane_count": wdcg_stats.get("pair_fate_in_opportunity_blocked_by_lane_count", ""),
                 "pair_fate_lane_admitted_blocked_by_eligibility_count": wdcg_stats.get("pair_fate_lane_admitted_blocked_by_eligibility_count", ""),
+                "pair_fate_lane_admitted_overlay_disabled_count": wdcg_stats.get("pair_fate_lane_admitted_overlay_disabled_count", ""),
                 "pair_fate_lane_admitted_fired_count": wdcg_stats.get("pair_fate_lane_admitted_fired_count", ""),
                 "pair_fate_not_generated_other_count": wdcg_stats.get("pair_fate_not_generated_other_count", ""),
                 "replacement_overlay_co_residency_count": wdcg_stats.get("replacement_overlay_co_residency_count", ""),

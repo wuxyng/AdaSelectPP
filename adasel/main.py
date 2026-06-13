@@ -538,6 +538,7 @@ def main() -> int:
             "pair_fate_generated_not_in_overlay_opportunity_count",
             "pair_fate_in_opportunity_blocked_by_lane_count",
             "pair_fate_lane_admitted_blocked_by_eligibility_count",
+            "pair_fate_lane_admitted_overlay_disabled_count",
             "pair_fate_lane_admitted_fired_count",
             "pair_fate_not_generated_other_count",
             "pair_fate_dropped_perquery_cap_examples",
@@ -545,6 +546,7 @@ def main() -> int:
             "pair_fate_generated_not_in_overlay_opportunity_examples",
             "pair_fate_in_opportunity_blocked_by_lane_examples",
             "pair_fate_lane_admitted_blocked_by_eligibility_examples",
+            "pair_fate_lane_admitted_overlay_disabled_examples",
             "pair_fate_lane_admitted_fired_examples",
             "pair_fate_not_generated_other_examples",
         ]
