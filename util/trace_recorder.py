@@ -82,6 +82,18 @@ def _structural_pair_type(key: IndexKey, meta: Dict[str, Any], meta_map: Dict[In
     return family
 
 
+def _diagnostic_structural_pair_type(key: IndexKey, meta: Dict[str, Any], meta_map: Dict[IndexKey, Any]) -> str:
+    if len(key[1]) != 2:
+        return ""
+    family = str(meta.get("family", "") or "")
+    seed_family = str(meta.get("grow_seed_family", "") or "")
+    if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
+        return "JOIN_RANGE"
+    if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
+        return "JOIN_EQ"
+    return _structural_pair_type(key, meta, meta_map)
+
+
 @dataclass
 class TraceRecorder:
     """Append-only CSV trace recorder."""
@@ -133,6 +145,9 @@ class TraceRecorder:
         "width_before_merge",
         "width_after_merge",
         "seed_key",
+        "grow_seed_key",
+        "grow_seed_family",
+        "grow_seed_family_set",
         "seed_benefit",
         "seed_normalized_benefit",
         "seed_evaluated_count",
@@ -144,8 +159,14 @@ class TraceRecorder:
         "seed_mature",
         "grow_reason",
         "rejected_growth_reason",
+        "pair_family_vs_grow_reason_mismatch",
+        "seed_family_missing",
+        "join_seed_downgraded",
+        "pair_fate",
         "covered_prefix_singles",
         "structural_pair_type",
+        "diagnostic_structural_pair_type",
+        "expected_structural_pair_type",
         "left_prefix_single",
         "component_singles",
         "left_prefix_in_old",
@@ -221,6 +242,20 @@ class TraceRecorder:
         "replacement_overlay_diff_from_topk_count",
         "overlay_opportunity_rounds",
         "overlay_lane_admitted_rounds",
+        "overlay_opportunity_pair_count",
+        "overlay_lane_admitted_pair_count",
+        "overlay_blocked_by_lane_count",
+        "overlay_blocked_by_eligibility_count",
+        "overlay_fired_pair_count",
+        "pair_fate_universe_count",
+        "pair_fate_dropped_perquery_cap_count",
+        "pair_fate_dropped_round_cap_count",
+        "pair_fate_generated_not_in_overlay_opportunity_count",
+        "pair_fate_in_opportunity_blocked_by_lane_count",
+        "pair_fate_lane_admitted_blocked_by_eligibility_count",
+        "pair_fate_lane_admitted_overlay_disabled_count",
+        "pair_fate_lane_admitted_fired_count",
+        "pair_fate_not_generated_other_count",
         "replacement_overlay_co_residency_count",
         # AdaSelect-only (best effort; blank for LiteSelect)
         "lambda",
@@ -289,6 +324,7 @@ class TraceRecorder:
         candidate: Set[IndexKey] = set()
         compile_rejected: Set[IndexKey] = set()
         meta_map: Dict[IndexKey, Any] = {}
+        pair_fate_map: Dict[IndexKey, str] = {}
         final_conf_logged: Set[IndexKey] = set(new_conf or set())
         if tuner is not None:
             try:
@@ -311,11 +347,16 @@ class TraceRecorder:
             except Exception:
                 meta_map = {}
                 compile_rejected = set()
+            try:
+                pair_fate_map = getattr(tuner, "_last_pair_fate_map", {}) or {}
+            except Exception:
+                pair_fate_map = {}
         width2_meta = {
             k for k in meta_map
             if isinstance(k, tuple) and len(k) == 2 and isinstance(k[1], tuple) and len(k[1]) == 2
         } if isinstance(meta_map, dict) else set()
-        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected | width2_meta)
+        pair_fate_keys = set(pair_fate_map) if isinstance(pair_fate_map, dict) else set()
+        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected | width2_meta | pair_fate_keys)
 
         # Per-round WDCG funnel stats (optional; repeat on each row)
         wdcg_stats: Dict[str, Any] = {}
@@ -467,6 +508,7 @@ class TraceRecorder:
 
             covered = ""
             structural_pair_type = ""
+            diagnostic_structural_pair_type = ""
             left_prefix_single = ""
             component_singles = ""
             left_prefix_in_old = ""
@@ -509,8 +551,10 @@ class TraceRecorder:
                     covered = ""
                 try:
                     structural_pair_type = _structural_pair_type(k, meta if isinstance(meta, dict) else {}, meta_map)
+                    diagnostic_structural_pair_type = _diagnostic_structural_pair_type(k, meta if isinstance(meta, dict) else {}, meta_map)
                 except Exception:
                     structural_pair_type = ""
+                    diagnostic_structural_pair_type = ""
                 repl = replacement_map.get(k, {}) if isinstance(replacement_map, dict) else {}
                 if isinstance(repl, dict):
                     lp = repl.get("left_prefix_single", None)
@@ -619,6 +663,9 @@ class TraceRecorder:
                 "width_before_merge": meta.get("width_before_merge", len(k[1])) if isinstance(meta, dict) else len(k[1]),
                 "width_after_merge": meta.get("width_after_merge", len(k[1])) if isinstance(meta, dict) else len(k[1]),
                 "seed_key": repr(meta.get("seed_key", "")) if isinstance(meta, dict) and meta.get("seed_key", "") else "",
+                "grow_seed_key": repr(meta.get("grow_seed_key", "")) if isinstance(meta, dict) and meta.get("grow_seed_key", "") else "",
+                "grow_seed_family": meta.get("grow_seed_family", "") if isinstance(meta, dict) else "",
+                "grow_seed_family_set": "|".join(str(x) for x in (meta.get("grow_seed_family_set", []) if isinstance(meta, dict) else []) if str(x)),
                 "seed_benefit": meta.get("seed_benefit", "") if isinstance(meta, dict) else "",
                 "seed_normalized_benefit": meta.get("seed_normalized_benefit", "") if isinstance(meta, dict) else "",
                 "seed_evaluated_count": meta.get("seed_evaluated_count", "") if isinstance(meta, dict) else "",
@@ -630,8 +677,14 @@ class TraceRecorder:
                 "seed_mature": meta.get("seed_mature", "") if isinstance(meta, dict) else "",
                 "grow_reason": meta.get("grow_reason", "") if isinstance(meta, dict) else "",
                 "rejected_growth_reason": meta.get("rejected_growth_reason", "") if isinstance(meta, dict) else "",
+                "pair_family_vs_grow_reason_mismatch": meta.get("pair_family_vs_grow_reason_mismatch", "") if isinstance(meta, dict) else "",
+                "seed_family_missing": meta.get("seed_family_missing", "") if isinstance(meta, dict) else "",
+                "join_seed_downgraded": meta.get("join_seed_downgraded", "") if isinstance(meta, dict) else "",
+                "pair_fate": pair_fate_map.get(k, "") if isinstance(pair_fate_map, dict) else "",
                 "covered_prefix_singles": covered,
                 "structural_pair_type": structural_pair_type,
+                "diagnostic_structural_pair_type": diagnostic_structural_pair_type,
+                "expected_structural_pair_type": meta.get("expected_structural_pair_type", "") if isinstance(meta, dict) else "",
                 "left_prefix_single": left_prefix_single,
                 "component_singles": component_singles,
                 "left_prefix_in_old": left_prefix_in_old,
@@ -707,6 +760,20 @@ class TraceRecorder:
                 "replacement_overlay_diff_from_topk_count": wdcg_stats.get("replacement_overlay_diff_from_topk_count", ""),
                 "overlay_opportunity_rounds": wdcg_stats.get("overlay_opportunity_rounds", ""),
                 "overlay_lane_admitted_rounds": wdcg_stats.get("overlay_lane_admitted_rounds", ""),
+                "overlay_opportunity_pair_count": wdcg_stats.get("overlay_opportunity_pair_count", ""),
+                "overlay_lane_admitted_pair_count": wdcg_stats.get("overlay_lane_admitted_pair_count", ""),
+                "overlay_blocked_by_lane_count": wdcg_stats.get("overlay_blocked_by_lane_count", ""),
+                "overlay_blocked_by_eligibility_count": wdcg_stats.get("overlay_blocked_by_eligibility_count", ""),
+                "overlay_fired_pair_count": wdcg_stats.get("overlay_fired_pair_count", ""),
+                "pair_fate_universe_count": wdcg_stats.get("pair_fate_universe_count", ""),
+                "pair_fate_dropped_perquery_cap_count": wdcg_stats.get("pair_fate_dropped_perquery_cap_count", ""),
+                "pair_fate_dropped_round_cap_count": wdcg_stats.get("pair_fate_dropped_round_cap_count", ""),
+                "pair_fate_generated_not_in_overlay_opportunity_count": wdcg_stats.get("pair_fate_generated_not_in_overlay_opportunity_count", ""),
+                "pair_fate_in_opportunity_blocked_by_lane_count": wdcg_stats.get("pair_fate_in_opportunity_blocked_by_lane_count", ""),
+                "pair_fate_lane_admitted_blocked_by_eligibility_count": wdcg_stats.get("pair_fate_lane_admitted_blocked_by_eligibility_count", ""),
+                "pair_fate_lane_admitted_overlay_disabled_count": wdcg_stats.get("pair_fate_lane_admitted_overlay_disabled_count", ""),
+                "pair_fate_lane_admitted_fired_count": wdcg_stats.get("pair_fate_lane_admitted_fired_count", ""),
+                "pair_fate_not_generated_other_count": wdcg_stats.get("pair_fate_not_generated_other_count", ""),
                 "replacement_overlay_co_residency_count": wdcg_stats.get("replacement_overlay_co_residency_count", ""),
                 "lambda": lam,
                 "lambda_shadow": lam_shadow,
