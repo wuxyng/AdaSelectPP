@@ -461,16 +461,29 @@ class AdaSelect:
         if explicit_type:
             return explicit_type
         seed_key = meta.get("seed_key", None) if isinstance(meta, dict) else None
-        seed_family = str(meta.get("grow_seed_family", "") or "") if isinstance(meta, dict) else ""
+        seed_family = ""
         if isinstance(seed_key, tuple) and len(seed_key) == 2 and isinstance(seed_key[1], tuple):
             seed_meta = meta_map.get(seed_key, {}) if isinstance(meta_map, dict) else {}
-            if isinstance(seed_meta, dict) and not seed_family:
+            if isinstance(seed_meta, dict):
                 seed_family = str(seed_meta.get("family", "") or "")
         if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
             return "JOIN_RANGE"
         if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
             return "JOIN_EQ"
         return family
+
+    def _diagnostic_structural_pair_type(self, key: IndexKey, meta_map: Optional[Dict[IndexKey, Dict[str, Any]]] = None) -> str:
+        if len(key[1]) != 2:
+            return ""
+        meta_map = meta_map if isinstance(meta_map, dict) else self._candidate_meta_map()
+        meta = meta_map.get(key, {}) if isinstance(meta_map, dict) else {}
+        family = str(meta.get("family", "") or "") if isinstance(meta, dict) else ""
+        seed_family = str(meta.get("grow_seed_family", "") or "") if isinstance(meta, dict) else ""
+        if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
+            return "JOIN_RANGE"
+        if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
+            return "JOIN_EQ"
+        return self._structural_pair_type(key, meta_map)
 
     def _is_structural_pair_candidate(
         self,
@@ -1257,7 +1270,10 @@ class AdaSelect:
             if pair in fired:
                 fate = "lane_admitted_fired"
             elif pair in admitted:
-                fate = "lane_admitted_blocked_by_eligibility"
+                if not bool(getattr(self, "replacement_overlay_enabled", False)):
+                    fate = "lane_admitted_overlay_disabled"
+                else:
+                    fate = "lane_admitted_blocked_by_eligibility"
             elif pair in opportunity:
                 fate = "in_opportunity_blocked_by_lane"
             elif pair in dropped_perquery and pair not in postquery:
@@ -1277,6 +1293,7 @@ class AdaSelect:
             "generated_not_in_overlay_opportunity",
             "in_opportunity_blocked_by_lane",
             "lane_admitted_blocked_by_eligibility",
+            "lane_admitted_overlay_disabled",
             "lane_admitted_fired",
             "not_generated_other",
         )
@@ -1428,7 +1445,7 @@ class AdaSelect:
             "overlay_lane_admitted_pair_count": int(len(admitted_pairs)),
             "overlay_fired_pair_count": int(len(self._last_overlay_fired_pairs)),
             "overlay_blocked_by_lane_count": int(max(0, len(opportunity_pairs - admitted_pairs))),
-            "overlay_blocked_by_eligibility_count": int(max(0, len(admitted_pairs) - len(self._last_overlay_fired_pairs))),
+            "overlay_blocked_by_eligibility_count": int(max(0, len(admitted_pairs) - len(self._last_overlay_fired_pairs))) if enabled else 0,
             "replacement_overlay_co_residency_count": int(self._co_residency_count(after_conf)),
         }
         self._last_wdcg_stats.update(stats)
