@@ -228,6 +228,10 @@ class AdaSelect:
         self._last_structural_pair_replacement_map: Dict[IndexKey, Dict[str, Any]] = {}
         self._last_structural_pair_candidate_set: Set[IndexKey] = set()
         self._last_structural_pair_lane_set: Set[IndexKey] = set()
+        self._last_pair_fate_map: Dict[IndexKey, str] = {}
+        self._last_overlay_opportunity_pairs: Set[IndexKey] = set()
+        self._last_overlay_admitted_pairs: Set[IndexKey] = set()
+        self._last_overlay_fired_pairs: Set[IndexKey] = set()
         self._last_shadow_action_rows: List[Dict[str, Any]] = []
         self._last_deadzone_stats: Dict[str, Any] = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
@@ -417,6 +421,10 @@ class AdaSelect:
         self._last_structural_pair_replacement_map = {}
         self._last_structural_pair_candidate_set = set()
         self._last_structural_pair_lane_set = set()
+        self._last_pair_fate_map = {}
+        self._last_overlay_opportunity_pairs = set()
+        self._last_overlay_admitted_pairs = set()
+        self._last_overlay_fired_pairs = set()
         self._last_shadow_action_rows = []
         self._last_deadzone_stats = {"deadzone_old_support": 0, "deadzone_blocked": 0}
 
@@ -463,6 +471,19 @@ class AdaSelect:
         if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
             return "JOIN_EQ"
         return family
+
+    def _diagnostic_structural_pair_type(self, key: IndexKey, meta_map: Optional[Dict[IndexKey, Dict[str, Any]]] = None) -> str:
+        if len(key[1]) != 2:
+            return ""
+        meta_map = meta_map if isinstance(meta_map, dict) else self._candidate_meta_map()
+        meta = meta_map.get(key, {}) if isinstance(meta_map, dict) else {}
+        family = str(meta.get("family", "") or "") if isinstance(meta, dict) else ""
+        seed_family = str(meta.get("grow_seed_family", "") or "") if isinstance(meta, dict) else ""
+        if family == "EQ_RANGE" and seed_family == "JOIN_EQ1":
+            return "JOIN_RANGE"
+        if family == "EQ_EQ" and seed_family == "JOIN_EQ1":
+            return "JOIN_EQ"
+        return self._structural_pair_type(key, meta_map)
 
     def _is_structural_pair_candidate(
         self,
@@ -1216,6 +1237,73 @@ class AdaSelect:
                 pairs.add(pair)
         return pairs
 
+    def _pair_supply_sets(self) -> Dict[str, Set[IndexKey]]:
+        try:
+            _gen = getattr(self, "_wdcg_gen", None)
+            supply = getattr(_gen, "last_pair_supply", {}) if _gen is not None else {}
+            if isinstance(supply, dict):
+                return {str(k): set(v or set()) for k, v in supply.items()}
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _pair_fate_examples(fate_map: Dict[IndexKey, str], fate: str, limit: int = 5) -> str:
+        items = sorted(k for k, v in fate_map.items() if v == fate)
+        return ";".join(AdaSelect._fmt_index_key(k) for k in items[:limit])
+
+    def _record_pair_supply_diagnostics(self) -> None:
+        supply = self._pair_supply_sets()
+        prequery = set(supply.get("prequery_width2", set()))
+        postquery = set(supply.get("postquery_width2", set()))
+        dropped_perquery = set(supply.get("dropped_perquery_width2", set()))
+        preround = set(supply.get("preround_width2", set()))
+        postround = set(supply.get("postround_width2", set()))
+        dropped_round = set(supply.get("dropped_round_width2", set()))
+        opportunity = set(getattr(self, "_last_overlay_opportunity_pairs", set()) or set())
+        admitted = set(getattr(self, "_last_overlay_admitted_pairs", set()) or set())
+        fired = set(getattr(self, "_last_overlay_fired_pairs", set()) or set())
+        universe = prequery | postquery | dropped_perquery | preround | postround | dropped_round | opportunity | admitted | fired
+
+        fate_map: Dict[IndexKey, str] = {}
+        for pair in sorted(universe, key=self._fmt_index_key):
+            if pair in fired:
+                fate = "lane_admitted_fired"
+            elif pair in admitted:
+                if not bool(getattr(self, "replacement_overlay_enabled", False)):
+                    fate = "lane_admitted_overlay_disabled"
+                else:
+                    fate = "lane_admitted_blocked_by_eligibility"
+            elif pair in opportunity:
+                fate = "in_opportunity_blocked_by_lane"
+            elif pair in dropped_perquery and pair not in postquery:
+                fate = "dropped_perquery_cap"
+            elif pair in dropped_round and pair not in postround:
+                fate = "dropped_round_cap"
+            elif pair in postround or pair in preround or pair in postquery:
+                fate = "generated_not_in_overlay_opportunity"
+            else:
+                fate = "not_generated_other"
+            fate_map[pair] = fate
+
+        self._last_pair_fate_map = fate_map
+        fate_names = (
+            "dropped_perquery_cap",
+            "dropped_round_cap",
+            "generated_not_in_overlay_opportunity",
+            "in_opportunity_blocked_by_lane",
+            "lane_admitted_blocked_by_eligibility",
+            "lane_admitted_overlay_disabled",
+            "lane_admitted_fired",
+            "not_generated_other",
+        )
+        stats: Dict[str, Any] = {"pair_fate_universe_count": int(len(fate_map))}
+        for fate in fate_names:
+            count = sum(1 for value in fate_map.values() if value == fate)
+            stats[f"pair_fate_{fate}_count"] = int(count)
+            stats[f"pair_fate_{fate}_examples"] = self._pair_fate_examples(fate_map, fate)
+        self._last_wdcg_stats.update(stats)
+
     @staticmethod
     def _first_overlay_block_reason(reasons: Set[str]) -> str:
         for reason in (
@@ -1240,6 +1328,9 @@ class AdaSelect:
             pair for pair in opportunity_pairs
             if pair in replacement_map and isinstance(replacement_map.get(pair), dict)
         }
+        self._last_overlay_opportunity_pairs = set(opportunity_pairs)
+        self._last_overlay_admitted_pairs = set(admitted_pairs)
+        self._last_overlay_fired_pairs = set()
         block_reasons: Set[str] = set()
         if opportunity_pairs and not replacement_map:
             block_reasons.add("no_structural_diag_this_round")
@@ -1327,6 +1418,8 @@ class AdaSelect:
             after_conf = set(before_conf)
             after_conf.remove(prefix)
             after_conf.add(pair)
+            if isinstance(pair, tuple):
+                self._last_overlay_fired_pairs = {pair}
 
         applied_count = 1 if applied_action is not None else 0
         diff_count = len(before_conf.symmetric_difference(after_conf))
@@ -1348,6 +1441,11 @@ class AdaSelect:
             "replacement_overlay_diff_from_topk_count": int(diff_count),
             "overlay_opportunity_rounds": int(bool(opportunity_pairs)),
             "overlay_lane_admitted_rounds": int(bool(admitted_pairs)),
+            "overlay_opportunity_pair_count": int(len(opportunity_pairs)),
+            "overlay_lane_admitted_pair_count": int(len(admitted_pairs)),
+            "overlay_fired_pair_count": int(len(self._last_overlay_fired_pairs)),
+            "overlay_blocked_by_lane_count": int(max(0, len(opportunity_pairs - admitted_pairs))),
+            "overlay_blocked_by_eligibility_count": int(max(0, len(admitted_pairs) - len(self._last_overlay_fired_pairs))) if enabled else 0,
             "replacement_overlay_co_residency_count": int(self._co_residency_count(after_conf)),
         }
         self._last_wdcg_stats.update(stats)
@@ -1505,6 +1603,7 @@ class AdaSelect:
             net_map=net,
         )
         selected_conf = self._record_replacement_overlay(set(selected_conf))
+        self._record_pair_supply_diagnostics()
         for diag in getattr(self, "_last_structural_pair_replacement_map", {}).values():
             if not isinstance(diag, dict):
                 continue
