@@ -78,6 +78,7 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "pair_fate_generated_not_in_overlay_opportunity_count",
     "pair_fate_in_opportunity_blocked_by_lane_count",
     "pair_fate_lane_admitted_blocked_by_eligibility_count",
+    "pair_fate_lane_admitted_overlay_disabled_count",
     "pair_fate_lane_admitted_fired_count",
     "pair_fate_not_generated_other_count",
     "replacement_overlay_co_residency_count",
@@ -247,6 +248,7 @@ def _summarize_pair_supply_metrics(rows: List[Dict[str, str]]) -> List[str]:
         "pair_fate_generated_not_in_overlay_opportunity",
         "pair_fate_in_opportunity_blocked_by_lane",
         "pair_fate_lane_admitted_blocked_by_eligibility",
+        "pair_fate_lane_admitted_overlay_disabled",
         "pair_fate_lane_admitted_fired",
         "pair_fate_not_generated_other",
     ]

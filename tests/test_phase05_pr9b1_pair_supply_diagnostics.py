@@ -104,9 +104,33 @@ def test_grow_seed_family_is_preserved_and_mismatch_counters_are_recorded():
     assert missing_stats["seed_family_missing_count"] == 1
 
 
+def test_grow_seed_family_does_not_change_active_structural_pair_ranking():
+    tuner = AdaSelect.__new__(AdaSelect)
+    tuner._last_wdcg_score_map = {PAIR_AB: 10.0, PAIR_AC: 10.0}
+    tuner._creation_cost = lambda _key: 0.0
+    meta_map = {
+        PAIR_AB: {
+            "family": "EQ_RANGE",
+            "grow_seed_family": "JOIN_EQ1",
+            "seed_normalized_benefit": 0.1,
+        },
+        PAIR_AC: {
+            "family": "EQ_RANGE",
+            "seed_normalized_benefit": 0.9,
+        },
+    }
+
+    ranked = tuner._rank_structural_pair_candidates([PAIR_AB, PAIR_AC], meta_map)
+
+    assert tuner._structural_pair_type(PAIR_AB, meta_map) == "EQ_RANGE"
+    assert tuner._diagnostic_structural_pair_type(PAIR_AB, meta_map) == "JOIN_RANGE"
+    assert ranked == [PAIR_AC, PAIR_AB]
+
+
 def test_pair_fate_classifier_distinguishes_caps_lane_eligibility_and_fire():
     tuner = AdaSelect.__new__(AdaSelect)
     tuner._last_wdcg_stats = {}
+    tuner.replacement_overlay_enabled = True
     tuner._last_overlay_opportunity_pairs = {PAIR_AC, PAIR_BC, PAIR_AD}
     tuner._last_overlay_admitted_pairs = {PAIR_BC, PAIR_AD}
     tuner._last_overlay_fired_pairs = {PAIR_BC}
@@ -133,6 +157,31 @@ def test_pair_fate_classifier_distinguishes_caps_lane_eligibility_and_fire():
     assert tuner._last_wdcg_stats["pair_fate_lane_admitted_fired_count"] == 1
 
 
+def test_pair_fate_distinguishes_overlay_disabled_from_eligibility_block():
+    tuner = AdaSelect.__new__(AdaSelect)
+    tuner._last_wdcg_stats = {}
+    tuner.replacement_overlay_enabled = False
+    tuner._last_overlay_opportunity_pairs = {PAIR_AB}
+    tuner._last_overlay_admitted_pairs = {PAIR_AB}
+    tuner._last_overlay_fired_pairs = set()
+    tuner._wdcg_gen = type("FakeGen", (), {
+        "last_pair_supply": {
+            "prequery_width2": {PAIR_AB},
+            "postquery_width2": {PAIR_AB},
+            "dropped_perquery_width2": set(),
+            "preround_width2": {PAIR_AB},
+            "postround_width2": {PAIR_AB},
+            "dropped_round_width2": set(),
+        }
+    })()
+
+    tuner._record_pair_supply_diagnostics()
+
+    assert tuner._last_pair_fate_map[PAIR_AB] == "lane_admitted_overlay_disabled"
+    assert tuner._last_wdcg_stats["pair_fate_lane_admitted_overlay_disabled_count"] == 1
+    assert tuner._last_wdcg_stats["pair_fate_lane_admitted_blocked_by_eligibility_count"] == 0
+
+
 def test_overlay_pair_count_metrics_are_pair_level_not_round_only():
     tuner = AdaSelect.__new__(AdaSelect)
     tuner.replacement_overlay_enabled = False
@@ -151,7 +200,7 @@ def test_overlay_pair_count_metrics_are_pair_level_not_round_only():
     assert tuner._last_wdcg_stats["overlay_opportunity_pair_count"] == 2
     assert tuner._last_wdcg_stats["overlay_lane_admitted_pair_count"] == 2
     assert tuner._last_wdcg_stats["overlay_fired_pair_count"] == 0
-    assert tuner._last_wdcg_stats["overlay_blocked_by_eligibility_count"] == 2
+    assert tuner._last_wdcg_stats["overlay_blocked_by_eligibility_count"] == 0
 
 
 def test_new_metrics_fields_are_serialized(tmp_path):
@@ -186,6 +235,7 @@ def test_trace_records_pair_fate_and_grow_seed_metadata(tmp_path):
             "grow_seed_family": "JOIN_EQ1",
             "grow_seed_family_set": ["JOIN_EQ1"],
             "grow_reason": "seed_eq_plus_range",
+            "expected_structural_pair_type": "JOIN_RANGE",
             "pair_family_vs_grow_reason_mismatch": 1,
             "seed_family_missing": 1,
             "join_seed_downgraded": 1,
@@ -207,5 +257,8 @@ def test_trace_records_pair_fate_and_grow_seed_metadata(tmp_path):
         rows = list(csv.DictReader(fh))
     assert len(rows) == 1
     assert rows[0]["pair_fate"] == "lane_admitted_fired"
+    assert rows[0]["structural_pair_type"] == "EQ_RANGE"
+    assert rows[0]["diagnostic_structural_pair_type"] == "JOIN_RANGE"
+    assert rows[0]["expected_structural_pair_type"] == "JOIN_RANGE"
     assert rows[0]["grow_seed_family"] == "JOIN_EQ1"
     assert rows[0]["pair_family_vs_grow_reason_mismatch"] == "1"
