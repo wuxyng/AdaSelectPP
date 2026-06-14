@@ -13,7 +13,7 @@ from adasel.config_flags import (
     resolve_target_pair_audit,
 )
 from adaselect_pp.candidate_gen_v2.generator import MCIGCandidateGenerator
-from adaselect_pp.candidate_gen_v2.types import Candidate
+from adaselect_pp.candidate_gen_v2.types import Candidate, QueryEvidence
 from util.metrics_recorder import MetricsRecorder
 
 
@@ -27,10 +27,10 @@ LINEITEM_PAIR = ("lineitem", ("l_partkey", "l_shipdate"))
 ORDERS_PAIR = ("orders", ("o_custkey", "o_orderdate"))
 
 
-def _candidate(key, family="EQ1", support=1):
+def _candidate(key, family="EQ1", support=1, query_id=0):
     cand = Candidate(key=key, family=family, source="AST", confidence=0.9, roles=("test",))
-    cand.query_ids = {0}
-    cand.template_ids = {"q0"}
+    cand.query_ids = {int(query_id)}
+    cand.template_ids = {f"q{int(query_id)}"}
     cand.support_count = support
     cand.score = MCIGCandidateGenerator.__new__(MCIGCandidateGenerator)._score(cand)
     return cand
@@ -41,7 +41,21 @@ def _generator(per_query_cap=2, per_table_cap=10, round_table_cap=10):
     gen.per_query_cap = per_query_cap
     gen.per_table_cap = per_table_cap
     gen.round_table_cap = round_table_cap
+    gen.probe_rounds = 0
+    gen.extractor = type("FakeExtractor", (), {"sqlglot_available": True})()
+    gen.vocab = type("FakeVocab", (), {"enabled": False, "path": "", "mapping": {}})()
     return gen
+
+
+def _wire_fake_generation(gen, query_maps):
+    evidences = [
+        QueryEvidence(query_id=i, template_id=f"q{i}", sql=f"select {i}", parse_status="ast_ok")
+        for i in range(len(query_maps))
+    ]
+    gen._extract_evidence = lambda _workload: (evidences, {"ast_ok": len(evidences), "fallback_regex": 0})
+    gen._emit_single_probes = lambda evidence: dict(query_maps[evidence.query_id])
+    gen._grow_width2 = lambda evidence, qmap, seed_states, rejected, grow_meta: {}
+    gen._add_vacuum_rescue = lambda evidence, qmap: None
 
 
 def test_default_query_ceiling_disabled_preserves_selection_order():
@@ -103,6 +117,58 @@ def test_pair_supply_ceiling_does_not_generate_absent_width2():
     assert set(selected) == {A, B}
     assert diag["width2_before"] == set()
     assert diag["ceiling_added_width2"] == set()
+
+
+def test_ceiling_candidate_delta_ignores_cross_query_non_delta():
+    gen = _generator(per_query_cap=2)
+    _wire_fake_generation(gen, [
+        {
+            A: _candidate(A, query_id=0),
+            B: _candidate(B, query_id=0),
+            PAIR_AB: _candidate(PAIR_AB, "EQ_RANGE", support=5, query_id=0),
+        },
+        {
+            PAIR_AB: _candidate(PAIR_AB, "EQ_RANGE", support=5, query_id=1),
+        },
+    ])
+
+    res = gen.generate(
+        ["q0", "q1"],
+        topk=10,
+        workload_count=2,
+        pair_supply_ceiling_enabled=True,
+        target_pair_audit={PAIR_AB},
+    )
+
+    assert res.stats["pair_supply_ceiling_width2_added_perquery"] > 0
+    assert PAIR_AB in res.topk_set
+    assert res.stats["pair_supply_ceiling_candidate_count_delta"] == 0
+    assert res.stats["pair_supply_ceiling_target_pairs_recovered"] == 0
+    assert res.stats["pair_supply_ceiling_examples"] == ""
+
+
+def test_ceiling_candidate_delta_counts_true_target_recovery():
+    gen = _generator(per_query_cap=2)
+    _wire_fake_generation(gen, [
+        {
+            A: _candidate(A, query_id=0),
+            B: _candidate(B, query_id=0),
+            PAIR_AC: _candidate(PAIR_AC, "EQ_RANGE", support=5, query_id=0),
+        },
+    ])
+
+    res = gen.generate(
+        ["q0"],
+        topk=10,
+        workload_count=2,
+        pair_supply_ceiling_enabled=True,
+        target_pair_audit={PAIR_AC},
+    )
+
+    assert PAIR_AC in res.topk_set
+    assert res.stats["pair_supply_ceiling_candidate_count_delta"] == 1
+    assert res.stats["pair_supply_ceiling_target_pairs_recovered"] == 1
+    assert res.stats["pair_supply_ceiling_examples"] == "t(a,c)"
 
 
 def test_target_pair_audit_parser_and_resolution():
