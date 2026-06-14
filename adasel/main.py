@@ -30,7 +30,11 @@ from util.metrics_recorder import MetricsRecorder
 from util.trace_recorder import TraceRecorder
 from util.logging_utils import setup_logging
 from adasel.ada_select import AdaSelect
-from adasel.config_flags import resolve_replacement_overlay_enabled
+from adasel.config_flags import (
+    resolve_pair_supply_ceiling_enabled,
+    resolve_replacement_overlay_enabled,
+    resolve_target_pair_audit,
+)
 from adaselect_pp.common import canonical_workload_line, sql_only
 
 
@@ -165,6 +169,8 @@ def parse_args() -> argparse.Namespace:
     # WDCG enable (Phase 0.5 funnel)
     p.add_argument("--wdcg_enabled", "--wdcg-enabled", dest="wdcg_enabled", type=int, choices=[0,1], default=None)
     p.add_argument("--replacement_overlay_enabled", "--replacement-overlay-enabled", dest="replacement_overlay_enabled", type=int, choices=[0,1], default=None)
+    p.add_argument("--pair_supply_ceiling_enabled", "--pair-supply-ceiling-enabled", dest="pair_supply_ceiling_enabled", type=int, choices=[0,1], default=None)
+    p.add_argument("--target_pair_audit", "--target-pair-audit", dest="target_pair_audit", type=str, default=None)
 
     # recorder
     p.add_argument("--osc_window", type=int, default=20)
@@ -249,6 +255,18 @@ def main() -> int:
         os.environ.get("REPLACEMENT_OVERLAY"),
         cfg_obj.get("replacement_overlay_enabled"),
         default=False,
+    )
+    cfg_obj["pair_supply_ceiling_enabled"] = resolve_pair_supply_ceiling_enabled(
+        args.pair_supply_ceiling_enabled,
+        os.environ.get("PAIR_SUPPLY_CEILING"),
+        cfg_obj.get("pair_supply_ceiling_enabled"),
+        default=False,
+    )
+    cfg_obj["target_pair_audit"] = resolve_target_pair_audit(
+        args.target_pair_audit,
+        os.environ.get("TARGET_PAIR_AUDIT"),
+        cfg_obj.get("target_pair_audit"),
+        default="",
     )
     if not bool(cfg_obj.get("wdcg_enabled", True)):
         raise ValueError("wdcg_enabled=false is not supported by the active Phase 0.5 generator path")
@@ -526,6 +544,13 @@ def main() -> int:
             "width2_cap_dropped_round",
             "width2_cap_dropped_round_by_table",
             "width2_cap_dropped_round_examples",
+            "pair_supply_ceiling_enabled",
+            "pair_supply_ceiling_width2_added_perquery",
+            "pair_supply_ceiling_width2_added_round",
+            "pair_supply_ceiling_width2_survived_count",
+            "pair_supply_ceiling_target_pairs_recovered",
+            "pair_supply_ceiling_candidate_count_delta",
+            "pair_supply_ceiling_examples",
             "width1_ranked_ahead_of_best_width2",
             "best_width2_family_score",
             "max_family_score_of_displacing_width1",
@@ -549,6 +574,18 @@ def main() -> int:
             "pair_fate_lane_admitted_overlay_disabled_examples",
             "pair_fate_lane_admitted_fired_examples",
             "pair_fate_not_generated_other_examples",
+            "target_pair_count",
+            "target_pair_prequery_coverage_count",
+            "target_pair_postquery_coverage_count",
+            "target_pair_preround_coverage_count",
+            "target_pair_postround_coverage_count",
+            "target_pair_lane_admitted_count",
+            "target_pair_selected_count",
+            "target_pair_final_count",
+            "target_pair_missing_examples",
+            "target_pair_dropped_perquery_examples",
+            "target_pair_dropped_round_examples",
+            "target_pair_fate_summary",
         ]
         shadow_metrics = {key: wdcg_stats.get(key, None) for key in shadow_metric_keys}
         overlay_metrics = {key: wdcg_stats.get(key, None) for key in overlay_metric_keys}

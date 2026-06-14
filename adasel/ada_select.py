@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from adaselect_pp.common import sql_only
 from util.benefit_normalizer import BenefitNormalizer
 from adaselect_pp.candidate_gen_v2 import MCIGCandidateGenerator
+from adasel.config_flags import coerce_bool_flag, parse_target_pair_audit
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,8 @@ class AdaSelect:
         self.ts_sign_decay = 0.90
         self.wdcg_enabled = True
         self.replacement_overlay_enabled = False
+        self.pair_supply_ceiling_enabled = False
+        self.target_pair_audit: Set[IndexKey] = set()
         self.log_candidate_sample = 12
         self.candidate_topk_factor = 4
         self.candidate_topk_min_extra = 6
@@ -277,6 +280,10 @@ class AdaSelect:
             self.replacement_overlay_enabled = replacement_overlay_cfg.strip().lower() in ("1", "true", "yes", "on")
         else:
             self.replacement_overlay_enabled = bool(replacement_overlay_cfg)
+        self.pair_supply_ceiling_enabled = coerce_bool_flag(
+            cfg.get("pair_supply_ceiling_enabled", self.pair_supply_ceiling_enabled)
+        )
+        self.target_pair_audit = parse_target_pair_audit(cfg.get("target_pair_audit", ""))
         self.log_candidate_sample = int(cfg.get("log_candidate_sample", self.log_candidate_sample))
         self.candidate_topk_factor = int(cfg.get("candidate_topk_factor", self.candidate_topk_factor))
         self.candidate_topk_min_extra = int(cfg.get("candidate_topk_min_extra", self.candidate_topk_min_extra))
@@ -297,6 +304,8 @@ class AdaSelect:
             "lambda_policy": self.lambda_policy,
             "wdcg_enabled": self.wdcg_enabled,
             "replacement_overlay_enabled": self.replacement_overlay_enabled,
+            "pair_supply_ceiling_enabled": self.pair_supply_ceiling_enabled,
+            "target_pair_audit": self._fmt_config(self.target_pair_audit),
             "benefit_decay_fixed": self.benefit_decay_fixed,
             "candidate_topk_factor": self.candidate_topk_factor,
             "candidate_topk_min_extra": self.candidate_topk_min_extra,
@@ -588,6 +597,8 @@ class AdaSelect:
             seed_last_seen_round=self.idx_last_seen_round,
             seed_seen_rounds=self.idx_seen_rounds,
             seed_normalized_benefit=seed_norm,
+            pair_supply_ceiling_enabled=self.pair_supply_ceiling_enabled,
+            target_pair_audit=set(self.target_pair_audit),
         )
         query_indexes = [set(x) for x in (res.query_indexes or [])]
         appearing = set(res.topk_set or set())
@@ -1252,7 +1263,12 @@ class AdaSelect:
         items = sorted(k for k, v in fate_map.items() if v == fate)
         return ";".join(AdaSelect._fmt_index_key(k) for k in items[:limit])
 
-    def _record_pair_supply_diagnostics(self) -> None:
+    def _record_pair_supply_diagnostics(
+        self,
+        *,
+        selected_conf: Optional[Set[IndexKey]] = None,
+        final_conf: Optional[Set[IndexKey]] = None,
+    ) -> None:
         supply = self._pair_supply_sets()
         prequery = set(supply.get("prequery_width2", set()))
         postquery = set(supply.get("postquery_width2", set()))
@@ -1302,6 +1318,29 @@ class AdaSelect:
             count = sum(1 for value in fate_map.values() if value == fate)
             stats[f"pair_fate_{fate}_count"] = int(count)
             stats[f"pair_fate_{fate}_examples"] = self._pair_fate_examples(fate_map, fate)
+        targets = set(getattr(self, "target_pair_audit", set()) or set())
+        selected_set = set(selected_conf if selected_conf is not None else getattr(self, "_last_candidate_conf", set()) or set())
+        final_set = set(final_conf if final_conf is not None else getattr(self, "_last_final_conf", set()) or set())
+        target_fates = {
+            pair: fate_map.get(pair, "not_generated_other")
+            for pair in sorted(targets, key=self._fmt_index_key)
+        }
+        stats.update({
+            "target_pair_count": int(len(targets)),
+            "target_pair_prequery_coverage_count": int(len(targets & prequery)),
+            "target_pair_postquery_coverage_count": int(len(targets & postquery)),
+            "target_pair_preround_coverage_count": int(len(targets & preround)),
+            "target_pair_postround_coverage_count": int(len(targets & postround)),
+            "target_pair_lane_admitted_count": int(len(targets & admitted)),
+            "target_pair_selected_count": int(len(targets & selected_set)),
+            "target_pair_final_count": int(len(targets & final_set)),
+            "target_pair_missing_examples": self._fmt_config(targets - prequery),
+            "target_pair_dropped_perquery_examples": self._fmt_config((targets & dropped_perquery) - postquery),
+            "target_pair_dropped_round_examples": self._fmt_config((targets & dropped_round) - postround),
+            "target_pair_fate_summary": ";".join(
+                f"{self._fmt_index_key(pair)}={fate}" for pair, fate in target_fates.items()
+            ),
+        })
         self._last_wdcg_stats.update(stats)
 
     @staticmethod
@@ -1602,8 +1641,12 @@ class AdaSelect:
             norm_map=normalized,
             net_map=net,
         )
+        pre_overlay_selected_conf = set(selected_conf)
         selected_conf = self._record_replacement_overlay(set(selected_conf))
-        self._record_pair_supply_diagnostics()
+        self._record_pair_supply_diagnostics(
+            selected_conf=pre_overlay_selected_conf,
+            final_conf=set(selected_conf),
+        )
         for diag in getattr(self, "_last_structural_pair_replacement_map", {}).values():
             if not isinstance(diag, dict):
                 continue
