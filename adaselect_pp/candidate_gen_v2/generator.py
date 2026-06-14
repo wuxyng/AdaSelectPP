@@ -222,7 +222,12 @@ class MCIGCandidateGenerator:
                 self._emit(out, query_id=evidence.query_id, template_id=evidence.template_id, table=table, cols=(col,), family="VACUUM_RESCUE1", source="VACUUM_RESCUE", roles=("rescue",), confidence=0.50)
                 break
 
-    def _query_reduce_with_diagnostics(self, out: Dict[IndexKey, Candidate]) -> Tuple[Dict[IndexKey, Candidate], Dict[str, Any]]:
+    def _query_reduce_with_diagnostics(
+        self,
+        out: Dict[IndexKey, Candidate],
+        *,
+        pair_supply_ceiling_enabled: bool = False,
+    ) -> Tuple[Dict[IndexKey, Candidate], Dict[str, Any]]:
         before_width2 = {key for key in out if self._is_width2(key)}
         table_counts: Dict[str, int] = defaultdict(int)
         selected: Dict[IndexKey, Candidate] = {}
@@ -233,19 +238,72 @@ class MCIGCandidateGenerator:
             table_counts[key[0]] += 1
             if len(selected) >= self.per_query_cap:
                 break
+        normal_width2 = {key for key in selected if self._is_width2(key)}
+        dropped_width2 = before_width2 - normal_width2
+        ceiling_added = set()
+        if pair_supply_ceiling_enabled:
+            for key, cand in sorted(out.items(), key=self._query_sort_key):
+                if key in selected or not self._is_width2(key):
+                    continue
+                selected[key] = cand
+                ceiling_added.add(key)
         after_width2 = {key for key in selected if self._is_width2(key)}
-        dropped_width2 = before_width2 - after_width2
         return selected, {
             "width2_before": before_width2,
             "width2_after": after_width2,
             "width2_dropped": dropped_width2,
+            "ceiling_added_width2": ceiling_added,
         }
 
     def _query_reduce(self, out: Dict[IndexKey, Candidate]) -> Dict[IndexKey, Candidate]:
         selected, _diag = self._query_reduce_with_diagnostics(out)
         return selected
 
-    def _round_select_with_diagnostics(self, merged: Dict[IndexKey, Candidate], topk: int) -> Tuple[List[Candidate], Dict[str, Any]]:
+    @staticmethod
+    def _clone_candidate(cand: Candidate) -> Candidate:
+        cloned = Candidate(
+            key=cand.key,
+            family=cand.family,
+            source=cand.source,
+            confidence=cand.confidence,
+            roles=tuple(cand.roles),
+        )
+        cloned.query_ids = set(cand.query_ids)
+        cloned.template_ids = set(cand.template_ids)
+        cloned.support_count = int(cand.support_count)
+        cloned.score = float(cand.score)
+        return cloned
+
+    def _merge_candidate(
+        self,
+        merged: Dict[IndexKey, Candidate],
+        key: IndexKey,
+        cand: Candidate,
+        grow_meta: Dict[IndexKey, Dict[str, object]],
+    ) -> None:
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = self._clone_candidate(cand)
+            return
+        existing.query_ids |= cand.query_ids
+        existing.template_ids |= cand.template_ids
+        existing.support_count = len(existing.query_ids)
+        # Keep the stronger family/source if duplicate evidence appears.
+        if self.FAMILY_SCORE.get(cand.family, 0) > self.FAMILY_SCORE.get(existing.family, 0):
+            existing.family = cand.family
+            existing.source = cand.source
+            existing.roles = cand.roles
+            existing.confidence = max(existing.confidence, cand.confidence)
+        if key in grow_meta:
+            grow_meta[key]["support_query_ids"] = sorted(existing.query_ids)
+
+    def _round_select_with_diagnostics(
+        self,
+        merged: Dict[IndexKey, Candidate],
+        topk: int,
+        *,
+        pair_supply_ceiling_enabled: bool = False,
+    ) -> Tuple[List[Candidate], Dict[str, Any]]:
         before_width2 = {key for key in merged if self._is_width2(key)}
         ranked = sorted(merged.values(), key=self._candidate_sort_key)
         table_counts: Dict[str, int] = defaultdict(int)
@@ -258,8 +316,18 @@ class MCIGCandidateGenerator:
                 continue
             selected.append(cand)
             table_counts[cand.key[0]] += 1
+        normal_keys = {cand.key for cand in selected}
+        normal_width2 = {cand.key for cand in selected if self._is_width2(cand.key)}
+        dropped_width2 = before_width2 - normal_width2
+        ceiling_added = set()
+        if pair_supply_ceiling_enabled:
+            for cand in ranked:
+                if cand.key in normal_keys or not self._is_width2(cand.key):
+                    continue
+                selected.append(cand)
+                normal_keys.add(cand.key)
+                ceiling_added.add(cand.key)
         after_width2 = {cand.key for cand in selected if self._is_width2(cand.key)}
-        dropped_width2 = before_width2 - after_width2
         best_width2_family_score = 0.0
         width1_ahead = 0
         max_displacing_width1_family_score = 0.0
@@ -280,6 +348,7 @@ class MCIGCandidateGenerator:
             "width2_before": before_width2,
             "width2_after": after_width2,
             "width2_dropped": dropped_width2,
+            "ceiling_added_width2": ceiling_added,
             "width1_ranked_ahead_of_best_width2": int(width1_ahead),
             "best_width2_family_score": float(best_width2_family_score),
             "max_family_score_of_displacing_width1": float(max_displacing_width1_family_score),
@@ -496,6 +565,8 @@ class MCIGCandidateGenerator:
         seed_last_seen_round: Optional[Dict[IndexKey, int]] = None,
         seed_seen_rounds: Optional[Dict[IndexKey, Set[int]]] = None,
         seed_normalized_benefit: Optional[Dict[IndexKey, float]] = None,
+        pair_supply_ceiling_enabled: bool = False,
+        target_pair_audit: Optional[Set[IndexKey]] = None,
         **_ignored,
     ) -> GenerationResult:
         start = time.perf_counter()
@@ -512,7 +583,12 @@ class MCIGCandidateGenerator:
         perquery_width2_before_events = 0
         perquery_width2_after_events = 0
         perquery_width2_dropped_events = 0
+        perquery_width2_ceiling_added_events = 0
+        perquery_width2_ceiling_added: Set[IndexKey] = set()
         perquery_dropped_by_table = Counter()
+        pair_supply_ceiling_enabled = bool(pair_supply_ceiling_enabled)
+        target_pairs = set(target_pair_audit or set())
+        normal_merged: Optional[Dict[IndexKey, Candidate]] = {} if pair_supply_ceiling_enabled else None
         evidences, parse_status = self._extract_evidence(workload_lines)
         seed_states = self._make_seed_states(
             seed_benefit=seed_benefit or mu_table,
@@ -534,51 +610,71 @@ class MCIGCandidateGenerator:
             for key, cand in qmap.items():
                 if self._is_width2(key) and key not in diagnostic_width2:
                     diagnostic_width2[key] = cand
-            qmap, query_diag = self._query_reduce_with_diagnostics(qmap)
+            normal_qmap: Optional[Dict[IndexKey, Candidate]] = None
+            if pair_supply_ceiling_enabled:
+                normal_qmap, _normal_query_diag = self._query_reduce_with_diagnostics(
+                    qmap,
+                    pair_supply_ceiling_enabled=False,
+                )
+            qmap, query_diag = self._query_reduce_with_diagnostics(
+                qmap,
+                pair_supply_ceiling_enabled=pair_supply_ceiling_enabled,
+            )
             query_width2_before = set(query_diag.get("width2_before", set()) or set())
             query_width2_after = set(query_diag.get("width2_after", set()) or set())
             query_width2_dropped = set(query_diag.get("width2_dropped", set()) or set())
+            query_width2_ceiling_added = set(query_diag.get("ceiling_added_width2", set()) or set())
             perquery_width2_before |= query_width2_before
             perquery_width2_after |= query_width2_after
             perquery_width2_dropped |= query_width2_dropped
+            perquery_width2_ceiling_added |= query_width2_ceiling_added
             perquery_width2_before_events += len(query_width2_before)
             perquery_width2_after_events += len(query_width2_after)
             perquery_width2_dropped_events += len(query_width2_dropped)
+            perquery_width2_ceiling_added_events += len(query_width2_ceiling_added)
             perquery_dropped_by_table.update(key[0] for key in query_width2_dropped)
             qset = set(qmap)
             per_query.append(qset)
+            if normal_merged is not None and normal_qmap is not None:
+                for key, cand in normal_qmap.items():
+                    self._merge_candidate(normal_merged, key, cand, {})
             for key, cand in qmap.items():
                 family_raw[cand.family] += 1
                 source_raw[cand.source] += 1
-                existing = merged.get(key)
-                if existing is None:
-                    merged[key] = cand
-                else:
-                    existing.query_ids |= cand.query_ids
-                    existing.template_ids |= cand.template_ids
-                    existing.support_count = len(existing.query_ids)
-                    # Keep the stronger family/source if duplicate evidence appears.
-                    if self.FAMILY_SCORE.get(cand.family, 0) > self.FAMILY_SCORE.get(existing.family, 0):
-                        existing.family = cand.family
-                        existing.source = cand.source
-                        existing.roles = cand.roles
-                        existing.confidence = max(existing.confidence, cand.confidence)
-                    if key in grow_meta:
-                        grow_meta[key]["support_query_ids"] = sorted(existing.query_ids)
+                self._merge_candidate(merged, key, cand, grow_meta)
 
         for cand in merged.values():
             cand.score = self._score(cand)
 
+        normal_topk_set: Set[IndexKey] = set()
+        if normal_merged is not None:
+            for cand in normal_merged.values():
+                cand.score = self._score(cand)
+            normal_selected, _normal_round_diag = self._round_select_with_diagnostics(
+                normal_merged,
+                topk,
+                pair_supply_ceiling_enabled=False,
+            )
+            normal_topk_set = {cand.key for cand in normal_selected}
+
         for cand in diagnostic_width2.values():
             cand.score = self._score(cand)
 
-        selected, round_diag = self._round_select_with_diagnostics(merged, topk)
+        selected, round_diag = self._round_select_with_diagnostics(
+            merged,
+            topk,
+            pair_supply_ceiling_enabled=pair_supply_ceiling_enabled,
+        )
         round_width2_before = set(round_diag.get("width2_before", set()) or set())
         round_width2_after = set(round_diag.get("width2_after", set()) or set())
         round_width2_dropped = set(round_diag.get("width2_dropped", set()) or set())
+        round_width2_ceiling_added = set(round_diag.get("ceiling_added_width2", set()) or set())
         round_dropped_by_table = Counter(key[0] for key in round_width2_dropped)
 
         topk_set = {c.key for c in selected}
+        actual_delta_set = (topk_set - normal_topk_set) if pair_supply_ceiling_enabled else set()
+        candidate_count_delta = len(actual_delta_set)
+        recovered_targets = target_pairs & actual_delta_set
         score_map = {c.key: c.score for c in selected}
         meta_map: Dict[IndexKey, Dict[str, object]] = {}
         for key, cand in merged.items():
@@ -607,6 +703,8 @@ class MCIGCandidateGenerator:
             "preround_width2": set(round_width2_before),
             "postround_width2": set(round_width2_after),
             "dropped_round_width2": set(round_width2_dropped),
+            "ceiling_added_perquery_width2": set(perquery_width2_ceiling_added),
+            "ceiling_added_round_width2": set(round_width2_ceiling_added),
         }
 
         aff = [sum(1 for qset in per_query if key in qset) for key in topk_set]
@@ -639,6 +737,7 @@ class MCIGCandidateGenerator:
             "width2_count": sum(1 for k in merged if len(k[1]) == 2),
             "width2_candidates_perquery_before_cap": int(perquery_width2_before_events),
             "width2_candidates_perquery_after_cap": int(perquery_width2_after_events),
+            # In ceiling mode, dropped_* fields mean would-have-dropped under the normal cap path.
             "width2_cap_dropped_perquery_events": int(perquery_width2_dropped_events),
             "width2_cap_dropped_perquery_by_table": self._serialize_by_table(perquery_dropped_by_table),
             "width2_cap_dropped_perquery_examples": self._serialize_examples(perquery_width2_dropped),
@@ -647,6 +746,13 @@ class MCIGCandidateGenerator:
             "width2_cap_dropped_round": int(len(round_width2_dropped)),
             "width2_cap_dropped_round_by_table": self._serialize_by_table(round_dropped_by_table),
             "width2_cap_dropped_round_examples": self._serialize_examples(round_width2_dropped),
+            "pair_supply_ceiling_enabled": int(pair_supply_ceiling_enabled),
+            "pair_supply_ceiling_width2_added_perquery": int(perquery_width2_ceiling_added_events),
+            "pair_supply_ceiling_width2_added_round": int(len(round_width2_ceiling_added)),
+            "pair_supply_ceiling_width2_survived_count": int(len(round_width2_after)),
+            "pair_supply_ceiling_target_pairs_recovered": int(len(recovered_targets)),
+            "pair_supply_ceiling_candidate_count_delta": int(candidate_count_delta),
+            "pair_supply_ceiling_examples": self._serialize_examples(actual_delta_set),
             "width1_ranked_ahead_of_best_width2": int(round_diag.get("width1_ranked_ahead_of_best_width2", 0)),
             "best_width2_family_score": float(round_diag.get("best_width2_family_score", 0.0)),
             "max_family_score_of_displacing_width1": float(round_diag.get("max_family_score_of_displacing_width1", 0.0)),
