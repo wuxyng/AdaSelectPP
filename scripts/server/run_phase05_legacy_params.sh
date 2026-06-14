@@ -10,6 +10,8 @@ STRICT_RANGE="${STRICT_RANGE:-0}"
 CASE_FILTER="${CASE_FILTER:-}"
 TRACE="${TRACE:-1}"
 REPLACEMENT_OVERLAY="${REPLACEMENT_OVERLAY:-0}"
+PAIR_SUPPLY_CEILING="${PAIR_SUPPLY_CEILING:-0}"
+TARGET_PAIR_AUDIT="${TARGET_PAIR_AUDIT:-}"
 
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GIT_FULL_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -102,6 +104,8 @@ op=$op
 lambda_policy=adaptive
 wdcg_enabled=1
 replacement_overlay_enabled=$REPLACEMENT_OVERLAY
+pair_supply_ceiling_enabled=$PAIR_SUPPLY_CEILING
+target_pair_audit=$TARGET_PAIR_AUDIT
 EOF
 }
 
@@ -185,7 +189,11 @@ run_case() {
     --lambda_policy adaptive
     --wdcg_enabled 1
     --replacement_overlay_enabled "$REPLACEMENT_OVERLAY"
+    --pair_supply_ceiling_enabled "$PAIR_SUPPLY_CEILING"
   )
+  if [[ -n "$TARGET_PAIR_AUDIT" ]]; then
+    cmd+=(--target_pair_audit "$TARGET_PAIR_AUDIT")
+  fi
   cmd+=("${trace_args[@]}")
 
   printf '== %s round_size=%s legacy_range=%s actual_invoke=%s alpha=%s beta=%s op=%s ==\n' \
@@ -242,6 +250,9 @@ DRY_RUN=$DRY_RUN
 STRICT_RANGE=$STRICT_RANGE
 CASE_FILTER=${CASE_FILTER}
 PYTHON_BIN=$PYTHON_BIN
+REPLACEMENT_OVERLAY=$REPLACEMENT_OVERLAY
+PAIR_SUPPLY_CEILING=$PAIR_SUPPLY_CEILING
+TARGET_PAIR_AUDIT=$TARGET_PAIR_AUDIT
 bash scripts/server/env_check.sh
 EOF
 
