@@ -41,6 +41,26 @@ def resolve_pair_supply_ceiling_enabled(cli_value, env_value, config_value, defa
     return bool(default)
 
 
+def resolve_pair_supply_fairness_enabled(cli_value, env_value, config_value, default=False) -> bool:
+    if cli_value is not None:
+        return coerce_bool_flag(cli_value)
+    if env_value is not None:
+        return coerce_bool_flag(env_value)
+    if config_value is not None:
+        return coerce_bool_flag(config_value)
+    return bool(default)
+
+
+def resolve_int_flag(cli_value, env_value, config_value, default: int) -> int:
+    if cli_value is not None:
+        return int(cli_value)
+    if env_value is not None and str(env_value).strip() != "":
+        return int(env_value)
+    if config_value is not None:
+        return int(config_value)
+    return int(default)
+
+
 def resolve_target_pair_audit(cli_value, env_value, config_value, default="") -> str:
     if cli_value is not None:
         return str(cli_value)
