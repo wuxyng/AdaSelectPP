@@ -157,6 +157,7 @@ def test_target_pair_not_in_postround_is_not_postround():
             "eval_gap",
             "prefix_shadowing_likely",
             "replacement_positive_main_nonpositive",
+            "eval_confirmed_nonbeneficial",
             "main_positive_but_not_selected",
             "candidate_conf_rejected_by_beta",
             "already_final",
