@@ -147,7 +147,24 @@ def test_target_pair_not_in_postround_is_not_postround():
     diag = _record(tuner, final_conf=set())
 
     assert diag["mat_gap_reason"] == "not_postround"
+    assert tuner._last_wdcg_stats["materialization_gap_not_postround_count"] == 1
+    assert tuner._last_wdcg_stats["materialization_gap_not_postround_examples"] == "t(a,b)"
     assert tuner._last_wdcg_stats["materialization_gap_pair_count"] == 1
+    reason_count_sum = sum(
+        int(tuner._last_wdcg_stats[f"materialization_gap_{reason}_count"])
+        for reason in (
+            "not_postround",
+            "eval_gap",
+            "prefix_shadowing_likely",
+            "replacement_positive_main_nonpositive",
+            "main_positive_but_not_selected",
+            "candidate_conf_rejected_by_beta",
+            "already_final",
+            "overlay_applied",
+            "unknown",
+        )
+    )
+    assert reason_count_sum == tuner._last_wdcg_stats["materialization_gap_pair_count"]
 
 
 def test_replacement_utility_is_recorded_from_existing_shadow_row():
@@ -190,7 +207,9 @@ def test_materialization_gap_metrics_are_serialized(tmp_path):
         old_conf=set(),
         new_conf=set(),
         materialization_gap_pair_count=2,
+        materialization_gap_not_postround_count=1,
         materialization_gap_eval_gap_count=1,
+        materialization_gap_not_postround_examples="t(a,c)",
         materialization_gap_eval_gap_examples="t(a,b)",
     )
     recorder.close()
@@ -198,7 +217,9 @@ def test_materialization_gap_metrics_are_serialized(tmp_path):
     with path.open(newline="", encoding="utf-8") as fh:
         row = next(csv.DictReader(fh))
     assert row["materialization_gap_pair_count"] == "2"
+    assert row["materialization_gap_not_postround_count"] == "1"
     assert row["materialization_gap_eval_gap_count"] == "1"
+    assert row["materialization_gap_not_postround_examples"] == "t(a,c)"
     assert row["materialization_gap_eval_gap_examples"] == "t(a,b)"
 
 
@@ -223,6 +244,7 @@ def test_trace_records_materialization_gap_fields(tmp_path):
     tuner._last_wdcg_stats = {
         "materialization_gap_pair_count": 1,
         "materialization_gap_eval_gap_count": 1,
+        "materialization_gap_not_postround_count": 0,
         "materialization_gap_eval_gap_examples": "t(a,b)",
     }
     tuner._last_final_conf = set()
@@ -239,3 +261,4 @@ def test_trace_records_materialization_gap_fields(tmp_path):
     assert rows[0]["mat_pair_key"] == "t(a,b)"
     assert rows[0]["mat_gap_reason"] == "eval_gap"
     assert rows[0]["materialization_gap_pair_count"] == "1"
+    assert rows[0]["materialization_gap_not_postround_count"] == "0"
