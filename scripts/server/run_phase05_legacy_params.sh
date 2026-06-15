@@ -11,7 +11,15 @@ CASE_FILTER="${CASE_FILTER:-}"
 TRACE="${TRACE:-1}"
 REPLACEMENT_OVERLAY="${REPLACEMENT_OVERLAY:-0}"
 PAIR_SUPPLY_CEILING="${PAIR_SUPPLY_CEILING:-0}"
+PAIR_SUPPLY_FAIRNESS="${PAIR_SUPPLY_FAIRNESS:-0}"
+PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE="${PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE:-1}"
+PAIR_SUPPLY_ROUND_WIDTH2_RESERVE="${PAIR_SUPPLY_ROUND_WIDTH2_RESERVE:-4}"
 TARGET_PAIR_AUDIT="${TARGET_PAIR_AUDIT:-}"
+
+if [[ "$PAIR_SUPPLY_CEILING" == "1" && "$PAIR_SUPPLY_FAIRNESS" == "1" ]]; then
+  echo "PAIR_SUPPLY_CEILING=1 and PAIR_SUPPLY_FAIRNESS=1 are mutually exclusive experimental arms" >&2
+  exit 2
+fi
 
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GIT_FULL_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -105,6 +113,9 @@ lambda_policy=adaptive
 wdcg_enabled=1
 replacement_overlay_enabled=$REPLACEMENT_OVERLAY
 pair_supply_ceiling_enabled=$PAIR_SUPPLY_CEILING
+pair_supply_fairness_enabled=$PAIR_SUPPLY_FAIRNESS
+pair_supply_per_table_width2_reserve=$PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE
+pair_supply_round_width2_reserve=$PAIR_SUPPLY_ROUND_WIDTH2_RESERVE
 target_pair_audit=$TARGET_PAIR_AUDIT
 EOF
 }
@@ -190,6 +201,9 @@ run_case() {
     --wdcg_enabled 1
     --replacement_overlay_enabled "$REPLACEMENT_OVERLAY"
     --pair_supply_ceiling_enabled "$PAIR_SUPPLY_CEILING"
+    --pair_supply_fairness_enabled "$PAIR_SUPPLY_FAIRNESS"
+    --pair_supply_per_table_width2_reserve "$PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE"
+    --pair_supply_round_width2_reserve "$PAIR_SUPPLY_ROUND_WIDTH2_RESERVE"
   )
   if [[ -n "$TARGET_PAIR_AUDIT" ]]; then
     cmd+=(--target_pair_audit "$TARGET_PAIR_AUDIT")
@@ -252,6 +266,9 @@ CASE_FILTER=${CASE_FILTER}
 PYTHON_BIN=$PYTHON_BIN
 REPLACEMENT_OVERLAY=$REPLACEMENT_OVERLAY
 PAIR_SUPPLY_CEILING=$PAIR_SUPPLY_CEILING
+PAIR_SUPPLY_FAIRNESS=$PAIR_SUPPLY_FAIRNESS
+PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE=$PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE
+PAIR_SUPPLY_ROUND_WIDTH2_RESERVE=$PAIR_SUPPLY_ROUND_WIDTH2_RESERVE
 TARGET_PAIR_AUDIT=$TARGET_PAIR_AUDIT
 bash scripts/server/env_check.sh
 EOF
