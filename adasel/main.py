@@ -31,7 +31,9 @@ from util.trace_recorder import TraceRecorder
 from util.logging_utils import setup_logging
 from adasel.ada_select import AdaSelect
 from adasel.config_flags import (
+    resolve_int_flag,
     resolve_pair_supply_ceiling_enabled,
+    resolve_pair_supply_fairness_enabled,
     resolve_replacement_overlay_enabled,
     resolve_target_pair_audit,
 )
@@ -170,6 +172,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wdcg_enabled", "--wdcg-enabled", dest="wdcg_enabled", type=int, choices=[0,1], default=None)
     p.add_argument("--replacement_overlay_enabled", "--replacement-overlay-enabled", dest="replacement_overlay_enabled", type=int, choices=[0,1], default=None)
     p.add_argument("--pair_supply_ceiling_enabled", "--pair-supply-ceiling-enabled", dest="pair_supply_ceiling_enabled", type=int, choices=[0,1], default=None)
+    p.add_argument("--pair_supply_fairness_enabled", "--pair-supply-fairness-enabled", dest="pair_supply_fairness_enabled", type=int, choices=[0,1], default=None)
+    p.add_argument("--pair_supply_per_table_width2_reserve", "--pair-supply-per-table-width2-reserve", dest="pair_supply_per_table_width2_reserve", type=int, choices=[1,2], default=None)
+    p.add_argument("--pair_supply_round_width2_reserve", "--pair-supply-round-width2-reserve", dest="pair_supply_round_width2_reserve", type=int, default=None)
     p.add_argument("--target_pair_audit", "--target-pair-audit", dest="target_pair_audit", type=str, default=None)
 
     # recorder
@@ -262,6 +267,26 @@ def main() -> int:
         cfg_obj.get("pair_supply_ceiling_enabled"),
         default=False,
     )
+    cfg_obj["pair_supply_fairness_enabled"] = resolve_pair_supply_fairness_enabled(
+        args.pair_supply_fairness_enabled,
+        os.environ.get("PAIR_SUPPLY_FAIRNESS"),
+        cfg_obj.get("pair_supply_fairness_enabled"),
+        default=False,
+    )
+    cfg_obj["pair_supply_per_table_width2_reserve"] = resolve_int_flag(
+        args.pair_supply_per_table_width2_reserve,
+        os.environ.get("PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE"),
+        cfg_obj.get("pair_supply_per_table_width2_reserve"),
+        default=1,
+    )
+    cfg_obj["pair_supply_round_width2_reserve"] = resolve_int_flag(
+        args.pair_supply_round_width2_reserve,
+        os.environ.get("PAIR_SUPPLY_ROUND_WIDTH2_RESERVE"),
+        cfg_obj.get("pair_supply_round_width2_reserve"),
+        default=4,
+    )
+    if bool(cfg_obj.get("pair_supply_ceiling_enabled")) and bool(cfg_obj.get("pair_supply_fairness_enabled")):
+        raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive experimental arms")
     cfg_obj["target_pair_audit"] = resolve_target_pair_audit(
         args.target_pair_audit,
         os.environ.get("TARGET_PAIR_AUDIT"),
@@ -551,6 +576,20 @@ def main() -> int:
             "pair_supply_ceiling_target_pairs_recovered",
             "pair_supply_ceiling_candidate_count_delta",
             "pair_supply_ceiling_examples",
+            "pair_supply_fairness_enabled",
+            "pair_supply_per_table_width2_reserve",
+            "pair_supply_round_width2_reserve",
+            "pair_supply_fairness_applied_count",
+            "pair_supply_fairness_rescued_width2_count",
+            "pair_supply_fairness_rescued_pairs",
+            "pair_supply_fairness_rescued_by_table",
+            "pair_supply_fairness_displaced_width1_count",
+            "pair_supply_fairness_displaced_width1_keys",
+            "pair_supply_fairness_columnset_dedup_count",
+            "pair_supply_fairness_block_reason",
+            "pair_supply_fairness_candidate_count_delta",
+            "pair_supply_fairness_target_pairs_recovered",
+            "pair_supply_fairness_target_pairs_recovered_examples",
             "width1_ranked_ahead_of_best_width2",
             "best_width2_family_score",
             "max_family_score_of_displacing_width1",
