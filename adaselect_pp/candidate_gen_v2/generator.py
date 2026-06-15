@@ -905,6 +905,7 @@ class MCIGCandidateGenerator:
             "dropped_round_width2": set(round_width2_dropped),
             "ceiling_added_perquery_width2": set(perquery_width2_ceiling_added),
             "ceiling_added_round_width2": set(round_width2_ceiling_added),
+            "fairness_added_round_width2": set(round_width2_fairness_added),
         }
 
         aff = [sum(1 for qset in per_query if key in qset) for key in topk_set]

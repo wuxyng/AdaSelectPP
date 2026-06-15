@@ -113,6 +113,8 @@ class AdaSelect:
         self.pair_supply_fairness_enabled = False
         self.pair_supply_per_table_width2_reserve = 1
         self.pair_supply_round_width2_reserve = 4
+        self.fairness_eval_lane_enabled = False
+        self.fairness_eval_lane_quota = 1
         self.target_pair_audit: Set[IndexKey] = set()
         self.log_candidate_sample = 12
         self.candidate_topk_factor = 4
@@ -295,6 +297,10 @@ class AdaSelect:
         self.pair_supply_round_width2_reserve = int(
             cfg.get("pair_supply_round_width2_reserve", self.pair_supply_round_width2_reserve)
         )
+        self.fairness_eval_lane_enabled = coerce_bool_flag(
+            cfg.get("fairness_eval_lane_enabled", self.fairness_eval_lane_enabled)
+        )
+        self.fairness_eval_lane_quota = max(0, int(cfg.get("fairness_eval_lane_quota", self.fairness_eval_lane_quota)))
         if self.pair_supply_ceiling_enabled and self.pair_supply_fairness_enabled:
             raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive")
         self.target_pair_audit = parse_target_pair_audit(cfg.get("target_pair_audit", ""))
@@ -322,6 +328,8 @@ class AdaSelect:
             "pair_supply_fairness_enabled": self.pair_supply_fairness_enabled,
             "pair_supply_per_table_width2_reserve": self.pair_supply_per_table_width2_reserve,
             "pair_supply_round_width2_reserve": self.pair_supply_round_width2_reserve,
+            "fairness_eval_lane_enabled": self.fairness_eval_lane_enabled,
+            "fairness_eval_lane_quota": self.fairness_eval_lane_quota,
             "target_pair_audit": self._fmt_config(self.target_pair_audit),
             "benefit_decay_fixed": self.benefit_decay_fixed,
             "candidate_topk_factor": self.candidate_topk_factor,
@@ -1280,6 +1288,123 @@ class AdaSelect:
         return {}
 
     @staticmethod
+    def _fairness_eval_target_priority() -> Tuple[IndexKey, ...]:
+        return (
+            ("lineitem", ("l_partkey", "l_shipdate")),
+            ("lineitem", ("l_partkey", "l_quantity")),
+            ("orders", ("o_custkey", "o_orderdate")),
+            ("part", ("p_brand", "p_container")),
+        )
+
+    def _rank_fairness_eval_lane_candidates(self, candidates: Set[IndexKey]) -> List[IndexKey]:
+        candidates = set(candidates or set())
+        if not candidates:
+            return []
+        supply = self._pair_supply_sets()
+        fairness_added = set(supply.get("fairness_added_round_width2", set()) or set())
+        targets = set(getattr(self, "target_pair_audit", set()) or set())
+        priority: List[IndexKey] = []
+        for key in self._fairness_eval_target_priority():
+            if key in candidates and key in targets:
+                priority.append(key)
+        for key in sorted((targets & candidates) - set(priority)):
+            priority.append(key)
+        for key in sorted((fairness_added & candidates) - set(priority)):
+            priority.append(key)
+        for key in sorted(candidates - set(priority)):
+            priority.append(key)
+        return priority
+
+    def _record_fairness_eval_lane_zero_stats(self) -> None:
+        self._last_wdcg_stats.update({
+            "fairness_eval_lane_enabled": int(bool(getattr(self, "fairness_eval_lane_enabled", False))),
+            "fairness_eval_lane_quota": int(max(0, getattr(self, "fairness_eval_lane_quota", 0))),
+            "fairness_eval_lane_candidate_count": 0,
+            "fairness_eval_lane_evaluated_count": 0,
+            "fairness_eval_lane_evaluated_pairs": "",
+            "fairness_eval_lane_replacement_diag_count": 0,
+            "fairness_eval_lane_skipped_already_evaluated_count": 0,
+            "fairness_eval_lane_budgeted_out_count": 0,
+            "fairness_eval_lane_what_if_calls": 0,
+            "fairness_eval_lane_replacement_what_if_calls": 0,
+            "fairness_eval_lane_shadowing_revealed_count": 0,
+            "fairness_eval_lane_nonbeneficial_count": 0,
+        })
+
+    def _run_fairness_eval_lane(
+        self,
+        query_indexes: List[Set[IndexKey]],
+        base_costs: List[float],
+        base_total: float,
+        old_conf: Set[IndexKey],
+        workload: List[str],
+    ) -> int:
+        self._record_fairness_eval_lane_zero_stats()
+        if not bool(getattr(self, "fairness_eval_lane_enabled", False)):
+            return 0
+
+        supply = self._pair_supply_sets()
+        postround = {
+            key for key in set(supply.get("postround_width2", set()) or set())
+            if isinstance(key, tuple) and len(key) == 2 and isinstance(key[1], tuple) and len(key[1]) == 2
+        }
+        postround = {key for key in postround if key not in set(old_conf or set())}
+        already = postround & set(getattr(self, "_last_evaluated_set", set()) or set())
+        candidates = postround - already
+        ranked = self._rank_fairness_eval_lane_candidates(candidates)
+        quota = int(max(0, getattr(self, "fairness_eval_lane_quota", 0)))
+        selected = ranked[:quota]
+        before_what_if = int(self._m_stats.get("what_if_calls", 0))
+        before_replacement_what_if = float(self._last_wdcg_stats.get("replacement_what_if_calls", 0.0) or 0.0)
+        replacement_diag_count = 0
+
+        for pair in selected:
+            self._test_candidate(pair, query_indexes, base_costs, base_total, old_conf, workload)
+            self._last_evaluated_set.add(pair)
+            if pair not in self._last_eval_order:
+                self._last_eval_order.append(pair)
+            self._record_structural_pair_replacement_diagnostic(
+                pair, query_indexes, base_costs, base_total, old_conf, workload
+            )
+            replacement_diag_count += 1
+
+        after_what_if = int(self._m_stats.get("what_if_calls", 0))
+        after_replacement_what_if = float(self._last_wdcg_stats.get("replacement_what_if_calls", 0.0) or 0.0)
+        shadowing_revealed = 0
+        nonbeneficial = 0
+        for pair in selected:
+            diag = self._last_structural_pair_replacement_map.get(pair, {})
+            try:
+                marginal = float(self._last_obs_delta_map.get(pair, 0.0) or 0.0)
+            except Exception:
+                marginal = 0.0
+            try:
+                repl_net = float(diag.get("replacement_net_benefit", 0.0) or 0.0) if isinstance(diag, dict) else 0.0
+            except Exception:
+                repl_net = 0.0
+            left_prefix = diag.get("left_prefix_single", None) if isinstance(diag, dict) else None
+            if marginal <= 0.0 and repl_net > 0.0 and left_prefix in set(old_conf or set()):
+                shadowing_revealed += 1
+            if marginal <= 0.0 and repl_net <= 0.0:
+                nonbeneficial += 1
+
+        self._last_wdcg_stats.update({
+            "fairness_eval_lane_enabled": 1,
+            "fairness_eval_lane_quota": quota,
+            "fairness_eval_lane_candidate_count": int(len(postround)),
+            "fairness_eval_lane_evaluated_count": int(len(selected)),
+            "fairness_eval_lane_evaluated_pairs": self._fmt_config(set(selected)),
+            "fairness_eval_lane_replacement_diag_count": int(replacement_diag_count),
+            "fairness_eval_lane_skipped_already_evaluated_count": int(len(already)),
+            "fairness_eval_lane_budgeted_out_count": int(max(0, len(ranked) - len(selected))),
+            "fairness_eval_lane_what_if_calls": int(after_what_if - before_what_if),
+            "fairness_eval_lane_replacement_what_if_calls": int(max(0.0, after_replacement_what_if - before_replacement_what_if)),
+            "fairness_eval_lane_shadowing_revealed_count": int(shadowing_revealed),
+            "fairness_eval_lane_nonbeneficial_count": int(nonbeneficial),
+        })
+        return len(selected)
+
+    @staticmethod
     def _pair_fate_examples(fate_map: Dict[IndexKey, str], fate: str, limit: int = 5) -> str:
         items = sorted(k for k, v in fate_map.items() if v == fate)
         return ";".join(AdaSelect._fmt_index_key(k) for k in items[:limit])
@@ -1445,10 +1570,12 @@ class AdaSelect:
                 reason = "not_postround"
             elif not is_evaluated:
                 reason = "eval_gap"
-            elif (prefix_in_old or prefix_in_candidate) and main_net <= 0.0 and repl_net > 0.0:
+            elif prefix_in_old and main_net <= 0.0 and repl_net > 0.0:
                 reason = "prefix_shadowing_likely"
             elif main_net <= 0.0 and repl_net > 0.0:
                 reason = "replacement_positive_main_nonpositive"
+            elif is_evaluated and main_net <= 0.0 and repl_available and repl_net <= 0.0:
+                reason = "eval_confirmed_nonbeneficial"
             elif main_net > 0.0 and not in_candidate and not in_final:
                 reason = "main_positive_but_not_selected"
             elif in_candidate and not in_final and set(selected_conf) == set(old_conf):
@@ -1483,6 +1610,7 @@ class AdaSelect:
             "eval_gap",
             "prefix_shadowing_likely",
             "replacement_positive_main_nonpositive",
+            "eval_confirmed_nonbeneficial",
             "main_positive_but_not_selected",
             "candidate_conf_rejected_by_beta",
             "already_final",
@@ -1500,6 +1628,9 @@ class AdaSelect:
             "materialization_gap_prefix_shadowing_examples": self._materialization_example_keys(gap_map, "prefix_shadowing_likely"),
             "materialization_gap_replacement_positive_main_nonpositive_examples": self._materialization_example_keys(
                 gap_map, "replacement_positive_main_nonpositive"
+            ),
+            "materialization_gap_eval_confirmed_nonbeneficial_examples": self._materialization_example_keys(
+                gap_map, "eval_confirmed_nonbeneficial"
             ),
             "materialization_gap_main_positive_not_selected_examples": self._materialization_example_keys(
                 gap_map, "main_positive_but_not_selected"
@@ -1674,6 +1805,7 @@ class AdaSelect:
             "replacement_fail_count": 0,
             "replacement_diag_time": 0.0,
         })
+        self._record_fairness_eval_lane_zero_stats()
         if not appearing:
             logger.info("BenefitBudget | appearing=0 base_total=%.3f", base_total)
             return
@@ -1720,10 +1852,14 @@ class AdaSelect:
                 self._record_structural_pair_replacement_diagnostic(
                     idx, query_indexes, base_costs, base_total, old_conf, workload
                 )
+        fairness_eval_trials = self._run_fairness_eval_lane(
+            query_indexes, base_costs, base_total, old_conf, workload
+        )
+        trials += fairness_eval_trials
         self._m_stats["evaluated_count"] += trials
         logger.info(
-            "BenefitEval | evaluated=%d what_if_u=%d what_if_total=%d structural_pair_eval_count=%d evaluated_top=%s",
-            trials, int(self._m_stats["what_if_calls"]) - before_whatif, int(self._m_stats["what_if_calls"]), structural_eval_count, list(self._last_evaluated_set)[: self.log_candidate_sample],
+            "BenefitEval | evaluated=%d what_if_u=%d what_if_total=%d structural_pair_eval_count=%d fairness_eval_lane=%d evaluated_top=%s",
+            trials, int(self._m_stats["what_if_calls"]) - before_whatif, int(self._m_stats["what_if_calls"]), structural_eval_count, fairness_eval_trials, list(self._last_evaluated_set)[: self.log_candidate_sample],
         )
 
         for key in list(self.columns_benefit.keys()):
