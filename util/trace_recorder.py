@@ -289,6 +289,39 @@ class TraceRecorder:
         "target_pair_dropped_perquery_examples",
         "target_pair_dropped_round_examples",
         "target_pair_fate_summary",
+        "mat_pair_key",
+        "mat_pair_in_postround",
+        "mat_pair_in_candidate_conf",
+        "mat_pair_in_final_conf",
+        "mat_pair_evaluated",
+        "mat_pair_main_raw_benefit",
+        "mat_pair_main_normalized_benefit",
+        "mat_pair_main_net_utility",
+        "mat_pair_creation_cost",
+        "mat_replacement_diag_available",
+        "mat_replacement_net_benefit",
+        "mat_replacement_utility",
+        "mat_left_prefix",
+        "mat_left_prefix_in_old_conf",
+        "mat_left_prefix_in_candidate_conf",
+        "mat_left_prefix_in_final_conf",
+        "mat_left_prefix_net_utility",
+        "mat_gap_reason",
+        "materialization_gap_pair_count",
+        "materialization_gap_not_postround_count",
+        "materialization_gap_eval_gap_count",
+        "materialization_gap_prefix_shadowing_likely_count",
+        "materialization_gap_replacement_positive_main_nonpositive_count",
+        "materialization_gap_main_positive_but_not_selected_count",
+        "materialization_gap_candidate_conf_rejected_by_beta_count",
+        "materialization_gap_already_final_count",
+        "materialization_gap_overlay_applied_count",
+        "materialization_gap_unknown_count",
+        "materialization_gap_not_postround_examples",
+        "materialization_gap_eval_gap_examples",
+        "materialization_gap_prefix_shadowing_examples",
+        "materialization_gap_replacement_positive_main_nonpositive_examples",
+        "materialization_gap_main_positive_not_selected_examples",
         "replacement_overlay_co_residency_count",
         # AdaSelect-only (best effort; blank for LiteSelect)
         "lambda",
@@ -358,6 +391,7 @@ class TraceRecorder:
         compile_rejected: Set[IndexKey] = set()
         meta_map: Dict[IndexKey, Any] = {}
         pair_fate_map: Dict[IndexKey, str] = {}
+        materialization_gap_map: Dict[IndexKey, Dict[str, Any]] = {}
         final_conf_logged: Set[IndexKey] = set(new_conf or set())
         if tuner is not None:
             try:
@@ -384,12 +418,17 @@ class TraceRecorder:
                 pair_fate_map = getattr(tuner, "_last_pair_fate_map", {}) or {}
             except Exception:
                 pair_fate_map = {}
+            try:
+                materialization_gap_map = getattr(tuner, "_last_materialization_gap_map", {}) or {}
+            except Exception:
+                materialization_gap_map = {}
         width2_meta = {
             k for k in meta_map
             if isinstance(k, tuple) and len(k) == 2 and isinstance(k[1], tuple) and len(k[1]) == 2
         } if isinstance(meta_map, dict) else set()
         pair_fate_keys = set(pair_fate_map) if isinstance(pair_fate_map, dict) else set()
-        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected | width2_meta | pair_fate_keys)
+        materialization_gap_keys = set(materialization_gap_map) if isinstance(materialization_gap_map, dict) else set()
+        interest: Set[IndexKey] = set(interest_set) if interest_set is not None else (set(old_conf) | final_conf_logged | ev | appearing | candidate | compile_rejected | width2_meta | pair_fate_keys | materialization_gap_keys)
 
         # Per-round WDCG funnel stats (optional; repeat on each row)
         wdcg_stats: Dict[str, Any] = {}
@@ -557,6 +596,9 @@ class TraceRecorder:
             replacement_ok_count = ""
             replacement_fail_count = ""
             replacement_diag_time = ""
+            mat = materialization_gap_map.get(k, {}) if isinstance(materialization_gap_map, dict) else {}
+            if not isinstance(mat, dict):
+                mat = {}
             shadow_action = shadow_action_map.get(k, {}) if isinstance(shadow_action_map, dict) else {}
             shadow_action_key = ""
             shadow_action_type = ""
@@ -840,6 +882,39 @@ class TraceRecorder:
                 "target_pair_dropped_perquery_examples": wdcg_stats.get("target_pair_dropped_perquery_examples", ""),
                 "target_pair_dropped_round_examples": wdcg_stats.get("target_pair_dropped_round_examples", ""),
                 "target_pair_fate_summary": wdcg_stats.get("target_pair_fate_summary", ""),
+                "mat_pair_key": mat.get("mat_pair_key", ""),
+                "mat_pair_in_postround": mat.get("mat_pair_in_postround", ""),
+                "mat_pair_in_candidate_conf": mat.get("mat_pair_in_candidate_conf", ""),
+                "mat_pair_in_final_conf": mat.get("mat_pair_in_final_conf", ""),
+                "mat_pair_evaluated": mat.get("mat_pair_evaluated", ""),
+                "mat_pair_main_raw_benefit": mat.get("mat_pair_main_raw_benefit", ""),
+                "mat_pair_main_normalized_benefit": mat.get("mat_pair_main_normalized_benefit", ""),
+                "mat_pair_main_net_utility": mat.get("mat_pair_main_net_utility", ""),
+                "mat_pair_creation_cost": mat.get("mat_pair_creation_cost", ""),
+                "mat_replacement_diag_available": mat.get("mat_replacement_diag_available", ""),
+                "mat_replacement_net_benefit": mat.get("mat_replacement_net_benefit", ""),
+                "mat_replacement_utility": mat.get("mat_replacement_utility", ""),
+                "mat_left_prefix": mat.get("mat_left_prefix", ""),
+                "mat_left_prefix_in_old_conf": mat.get("mat_left_prefix_in_old_conf", ""),
+                "mat_left_prefix_in_candidate_conf": mat.get("mat_left_prefix_in_candidate_conf", ""),
+                "mat_left_prefix_in_final_conf": mat.get("mat_left_prefix_in_final_conf", ""),
+                "mat_left_prefix_net_utility": mat.get("mat_left_prefix_net_utility", ""),
+                "mat_gap_reason": mat.get("mat_gap_reason", ""),
+                "materialization_gap_pair_count": wdcg_stats.get("materialization_gap_pair_count", ""),
+                "materialization_gap_not_postround_count": wdcg_stats.get("materialization_gap_not_postround_count", ""),
+                "materialization_gap_eval_gap_count": wdcg_stats.get("materialization_gap_eval_gap_count", ""),
+                "materialization_gap_prefix_shadowing_likely_count": wdcg_stats.get("materialization_gap_prefix_shadowing_likely_count", ""),
+                "materialization_gap_replacement_positive_main_nonpositive_count": wdcg_stats.get("materialization_gap_replacement_positive_main_nonpositive_count", ""),
+                "materialization_gap_main_positive_but_not_selected_count": wdcg_stats.get("materialization_gap_main_positive_but_not_selected_count", ""),
+                "materialization_gap_candidate_conf_rejected_by_beta_count": wdcg_stats.get("materialization_gap_candidate_conf_rejected_by_beta_count", ""),
+                "materialization_gap_already_final_count": wdcg_stats.get("materialization_gap_already_final_count", ""),
+                "materialization_gap_overlay_applied_count": wdcg_stats.get("materialization_gap_overlay_applied_count", ""),
+                "materialization_gap_unknown_count": wdcg_stats.get("materialization_gap_unknown_count", ""),
+                "materialization_gap_not_postround_examples": wdcg_stats.get("materialization_gap_not_postround_examples", ""),
+                "materialization_gap_eval_gap_examples": wdcg_stats.get("materialization_gap_eval_gap_examples", ""),
+                "materialization_gap_prefix_shadowing_examples": wdcg_stats.get("materialization_gap_prefix_shadowing_examples", ""),
+                "materialization_gap_replacement_positive_main_nonpositive_examples": wdcg_stats.get("materialization_gap_replacement_positive_main_nonpositive_examples", ""),
+                "materialization_gap_main_positive_not_selected_examples": wdcg_stats.get("materialization_gap_main_positive_not_selected_examples", ""),
                 "replacement_overlay_co_residency_count": wdcg_stats.get("replacement_overlay_co_residency_count", ""),
                 "lambda": lam,
                 "lambda_shadow": lam_shadow,
