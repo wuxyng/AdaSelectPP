@@ -31,6 +31,7 @@ from util.trace_recorder import TraceRecorder
 from util.logging_utils import setup_logging
 from adasel.ada_select import AdaSelect
 from adasel.config_flags import (
+    resolve_fairness_eval_lane_enabled,
     resolve_int_flag,
     resolve_pair_supply_ceiling_enabled,
     resolve_pair_supply_fairness_enabled,
@@ -175,6 +176,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pair_supply_fairness_enabled", "--pair-supply-fairness-enabled", dest="pair_supply_fairness_enabled", type=int, choices=[0,1], default=None)
     p.add_argument("--pair_supply_per_table_width2_reserve", "--pair-supply-per-table-width2-reserve", dest="pair_supply_per_table_width2_reserve", type=int, choices=[1,2], default=None)
     p.add_argument("--pair_supply_round_width2_reserve", "--pair-supply-round-width2-reserve", dest="pair_supply_round_width2_reserve", type=int, default=None)
+    p.add_argument("--fairness_eval_lane_enabled", "--fairness-eval-lane-enabled", dest="fairness_eval_lane_enabled", type=int, choices=[0,1], default=None)
+    p.add_argument("--fairness_eval_lane_quota", "--fairness-eval-lane-quota", dest="fairness_eval_lane_quota", type=int, default=None)
     p.add_argument("--target_pair_audit", "--target-pair-audit", dest="target_pair_audit", type=str, default=None)
 
     # recorder
@@ -285,6 +288,18 @@ def main() -> int:
         cfg_obj.get("pair_supply_round_width2_reserve"),
         default=4,
     )
+    cfg_obj["fairness_eval_lane_enabled"] = resolve_fairness_eval_lane_enabled(
+        args.fairness_eval_lane_enabled,
+        os.environ.get("FAIRNESS_EVAL_LANE"),
+        cfg_obj.get("fairness_eval_lane_enabled"),
+        default=False,
+    )
+    cfg_obj["fairness_eval_lane_quota"] = max(0, resolve_int_flag(
+        args.fairness_eval_lane_quota,
+        os.environ.get("FAIRNESS_EVAL_LANE_QUOTA"),
+        cfg_obj.get("fairness_eval_lane_quota"),
+        default=1,
+    ))
     if bool(cfg_obj.get("pair_supply_ceiling_enabled")) and bool(cfg_obj.get("pair_supply_fairness_enabled")):
         raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive experimental arms")
     cfg_obj["target_pair_audit"] = resolve_target_pair_audit(
@@ -590,6 +605,18 @@ def main() -> int:
             "pair_supply_fairness_candidate_count_delta",
             "pair_supply_fairness_target_pairs_recovered",
             "pair_supply_fairness_target_pairs_recovered_examples",
+            "fairness_eval_lane_enabled",
+            "fairness_eval_lane_quota",
+            "fairness_eval_lane_candidate_count",
+            "fairness_eval_lane_evaluated_count",
+            "fairness_eval_lane_evaluated_pairs",
+            "fairness_eval_lane_replacement_diag_count",
+            "fairness_eval_lane_skipped_already_evaluated_count",
+            "fairness_eval_lane_budgeted_out_count",
+            "fairness_eval_lane_what_if_calls",
+            "fairness_eval_lane_replacement_what_if_calls",
+            "fairness_eval_lane_shadowing_revealed_count",
+            "fairness_eval_lane_nonbeneficial_count",
             "width1_ranked_ahead_of_best_width2",
             "best_width2_family_score",
             "max_family_score_of_displacing_width1",
@@ -630,6 +657,7 @@ def main() -> int:
             "materialization_gap_eval_gap_count",
             "materialization_gap_prefix_shadowing_likely_count",
             "materialization_gap_replacement_positive_main_nonpositive_count",
+            "materialization_gap_eval_confirmed_nonbeneficial_count",
             "materialization_gap_main_positive_but_not_selected_count",
             "materialization_gap_candidate_conf_rejected_by_beta_count",
             "materialization_gap_already_final_count",
@@ -639,6 +667,7 @@ def main() -> int:
             "materialization_gap_eval_gap_examples",
             "materialization_gap_prefix_shadowing_examples",
             "materialization_gap_replacement_positive_main_nonpositive_examples",
+            "materialization_gap_eval_confirmed_nonbeneficial_examples",
             "materialization_gap_main_positive_not_selected_examples",
         ]
         shadow_metrics = {key: wdcg_stats.get(key, None) for key in shadow_metric_keys}
