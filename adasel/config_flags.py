@@ -51,6 +51,16 @@ def resolve_pair_supply_fairness_enabled(cli_value, env_value, config_value, def
     return bool(default)
 
 
+def resolve_fairness_eval_lane_enabled(cli_value, env_value, config_value, default=False) -> bool:
+    if cli_value is not None:
+        return coerce_bool_flag(cli_value)
+    if env_value is not None:
+        return coerce_bool_flag(env_value)
+    if config_value is not None:
+        return coerce_bool_flag(config_value)
+    return bool(default)
+
+
 def resolve_int_flag(cli_value, env_value, config_value, default: int) -> int:
     if cli_value is not None:
         return int(cli_value)

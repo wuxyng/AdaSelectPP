@@ -14,6 +14,8 @@ PAIR_SUPPLY_CEILING="${PAIR_SUPPLY_CEILING:-0}"
 PAIR_SUPPLY_FAIRNESS="${PAIR_SUPPLY_FAIRNESS:-0}"
 PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE="${PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE:-1}"
 PAIR_SUPPLY_ROUND_WIDTH2_RESERVE="${PAIR_SUPPLY_ROUND_WIDTH2_RESERVE:-4}"
+FAIRNESS_EVAL_LANE="${FAIRNESS_EVAL_LANE:-0}"
+FAIRNESS_EVAL_LANE_QUOTA="${FAIRNESS_EVAL_LANE_QUOTA:-1}"
 TARGET_PAIR_AUDIT="${TARGET_PAIR_AUDIT:-}"
 
 if [[ "$PAIR_SUPPLY_CEILING" == "1" && "$PAIR_SUPPLY_FAIRNESS" == "1" ]]; then
@@ -116,6 +118,8 @@ pair_supply_ceiling_enabled=$PAIR_SUPPLY_CEILING
 pair_supply_fairness_enabled=$PAIR_SUPPLY_FAIRNESS
 pair_supply_per_table_width2_reserve=$PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE
 pair_supply_round_width2_reserve=$PAIR_SUPPLY_ROUND_WIDTH2_RESERVE
+fairness_eval_lane_enabled=$FAIRNESS_EVAL_LANE
+fairness_eval_lane_quota=$FAIRNESS_EVAL_LANE_QUOTA
 target_pair_audit=$TARGET_PAIR_AUDIT
 EOF
 }
@@ -204,6 +208,8 @@ run_case() {
     --pair_supply_fairness_enabled "$PAIR_SUPPLY_FAIRNESS"
     --pair_supply_per_table_width2_reserve "$PAIR_SUPPLY_PER_TABLE_WIDTH2_RESERVE"
     --pair_supply_round_width2_reserve "$PAIR_SUPPLY_ROUND_WIDTH2_RESERVE"
+    --fairness_eval_lane_enabled "$FAIRNESS_EVAL_LANE"
+    --fairness_eval_lane_quota "$FAIRNESS_EVAL_LANE_QUOTA"
   )
   if [[ -n "$TARGET_PAIR_AUDIT" ]]; then
     cmd+=(--target_pair_audit "$TARGET_PAIR_AUDIT")
