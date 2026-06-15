@@ -177,6 +177,15 @@ class MCIGCandidateGenerator:
     def _serialize_by_table(counter: Counter) -> str:
         return "|".join(f"{table}:{int(count)}" for table, count in sorted(counter.items()) if int(count) > 0)
 
+    @staticmethod
+    def _serialize_counter(counter: Counter) -> str:
+        items = [(str(key), int(count)) for key, count in sorted(counter.items()) if int(count) > 0]
+        if not items:
+            return ""
+        if len(items) == 1:
+            return items[0][0]
+        return "|".join(f"{key}:{count}" for key, count in items)
+
     def _best_eq_cols(self, evidence: QueryEvidence, table: str) -> List[str]:
         # Deterministic, conservative: filter EQ before join EQ.
         return unique_keep_order((evidence.filter_eq.get(table, []) or []) + (evidence.join_eq.get(table, []) or []))
@@ -303,7 +312,13 @@ class MCIGCandidateGenerator:
         topk: int,
         *,
         pair_supply_ceiling_enabled: bool = False,
+        pair_supply_fairness_enabled: bool = False,
+        pair_supply_per_table_width2_reserve: int = 1,
+        pair_supply_round_width2_reserve: int = 4,
+        grow_meta: Optional[Dict[IndexKey, Dict[str, object]]] = None,
     ) -> Tuple[List[Candidate], Dict[str, Any]]:
+        if pair_supply_ceiling_enabled and pair_supply_fairness_enabled:
+            raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive")
         before_width2 = {key for key in merged if self._is_width2(key)}
         ranked = sorted(merged.values(), key=self._candidate_sort_key)
         table_counts: Dict[str, int] = defaultdict(int)
@@ -317,9 +332,15 @@ class MCIGCandidateGenerator:
             selected.append(cand)
             table_counts[cand.key[0]] += 1
         normal_keys = {cand.key for cand in selected}
+        no_feature_keys = set(normal_keys)
         normal_width2 = {cand.key for cand in selected if self._is_width2(cand.key)}
         dropped_width2 = before_width2 - normal_width2
         ceiling_added = set()
+        fairness_added: Set[IndexKey] = set()
+        fairness_displaced: List[IndexKey] = []
+        fairness_dedup_count = 0
+        fairness_block_reasons = Counter()
+        fairness_by_table = Counter()
         if pair_supply_ceiling_enabled:
             for cand in ranked:
                 if cand.key in normal_keys or not self._is_width2(cand.key):
@@ -327,6 +348,21 @@ class MCIGCandidateGenerator:
                 selected.append(cand)
                 normal_keys.add(cand.key)
                 ceiling_added.add(cand.key)
+        if pair_supply_fairness_enabled:
+            fairness_diag = self._apply_round_width2_fairness(
+                selected=selected,
+                ranked=ranked,
+                limit=limit,
+                table_counts=table_counts,
+                per_table_width2_reserve=pair_supply_per_table_width2_reserve,
+                round_width2_reserve=pair_supply_round_width2_reserve,
+                grow_meta=grow_meta or {},
+            )
+            fairness_added = set(fairness_diag.get("added", set()) or set())
+            fairness_displaced = list(fairness_diag.get("displaced", []) or [])
+            fairness_dedup_count = int(fairness_diag.get("dedup_count", 0) or 0)
+            fairness_block_reasons.update(fairness_diag.get("block_reasons", Counter()) or Counter())
+            fairness_by_table.update(key[0] for key in fairness_added)
         after_width2 = {cand.key for cand in selected if self._is_width2(cand.key)}
         best_width2_family_score = 0.0
         width1_ahead = 0
@@ -349,9 +385,154 @@ class MCIGCandidateGenerator:
             "width2_after": after_width2,
             "width2_dropped": dropped_width2,
             "ceiling_added_width2": ceiling_added,
+            "no_feature_topk_set": no_feature_keys,
+            "fairness_added_width2": fairness_added,
+            "fairness_displaced_width1": set(fairness_displaced),
+            "fairness_displaced_width1_list": fairness_displaced,
+            "fairness_columnset_dedup_count": int(fairness_dedup_count),
+            "fairness_rescued_by_table": fairness_by_table,
+            "fairness_block_reasons": fairness_block_reasons,
             "width1_ranked_ahead_of_best_width2": int(width1_ahead),
             "best_width2_family_score": float(best_width2_family_score),
             "max_family_score_of_displacing_width1": float(max_displacing_width1_family_score),
+        }
+
+    @classmethod
+    def _diagnostic_pair_type_for_rank(
+        cls,
+        cand: Candidate,
+        grow_meta: Optional[Dict[IndexKey, Dict[str, object]]] = None,
+    ) -> str:
+        meta = (grow_meta or {}).get(cand.key, {}) or {}
+        expected = str(meta.get("expected_structural_pair_type", "") or "")
+        if expected:
+            return expected
+        family = str(cand.family or "")
+        if family in {"JOIN_RANGE", "EQ_RANGE", "JOIN_EQ", "EQ_EQ"}:
+            return family
+        grow_reason = str(meta.get("grow_reason", "") or "")
+        seed_families = {str(x) for x in meta.get("grow_seed_family_set", []) if str(x)}
+        seed_family = str(meta.get("grow_seed_family", "") or "")
+        if seed_family:
+            seed_families.add(seed_family)
+        join_seeded = any(fam.startswith("JOIN") for fam in seed_families)
+        if "range" in grow_reason:
+            return "JOIN_RANGE" if join_seeded else "EQ_RANGE"
+        if "eq" in grow_reason:
+            return "JOIN_EQ" if join_seeded else "EQ_EQ"
+        return family
+
+    @classmethod
+    def _fairness_pair_priority(
+        cls,
+        cand: Candidate,
+        grow_meta: Optional[Dict[IndexKey, Dict[str, object]]] = None,
+    ) -> int:
+        pair_type = cls._diagnostic_pair_type_for_rank(cand, grow_meta)
+        if pair_type in {"JOIN_RANGE", "EQ_RANGE"}:
+            return 3
+        if pair_type in {"JOIN_EQ", "EQ_EQ"}:
+            return 2
+        return 1
+
+    @classmethod
+    def _fairness_rank_key(
+        cls,
+        cand: Candidate,
+        grow_meta: Optional[Dict[IndexKey, Dict[str, object]]] = None,
+    ) -> Tuple[int, float, IndexKey]:
+        return (-cls._fairness_pair_priority(cand, grow_meta), -float(cand.score), cand.key)
+
+    def _apply_round_width2_fairness(
+        self,
+        *,
+        selected: List[Candidate],
+        ranked: List[Candidate],
+        limit: int,
+        table_counts: Dict[str, int],
+        per_table_width2_reserve: int,
+        round_width2_reserve: int,
+        grow_meta: Dict[IndexKey, Dict[str, object]],
+    ) -> Dict[str, Any]:
+        per_table_width2_reserve = max(0, int(per_table_width2_reserve))
+        round_width2_reserve = max(0, int(round_width2_reserve))
+        if per_table_width2_reserve <= 0 or round_width2_reserve <= 0:
+            return {"added": set(), "displaced": [], "dedup_count": 0, "block_reasons": Counter()}
+
+        selected_keys = {cand.key for cand in selected}
+        selected_unordered: Dict[str, Set[frozenset]] = defaultdict(set)
+        selected_width2_counts = Counter()
+        for cand in selected:
+            if self._is_width2(cand.key):
+                selected_width2_counts[cand.key[0]] += 1
+                selected_unordered[cand.key[0]].add(frozenset(cand.key[1]))
+
+        width2_by_table: Dict[str, List[Candidate]] = defaultdict(list)
+        for cand in ranked:
+            if self._is_width2(cand.key) and cand.key not in selected_keys:
+                width2_by_table[cand.key[0]].append(cand)
+        for table in list(width2_by_table):
+            width2_by_table[table].sort(key=lambda cand: self._fairness_rank_key(cand, grow_meta))
+
+        added: Set[IndexKey] = set()
+        displaced: List[IndexKey] = []
+        dedup_count = 0
+        block_reasons = Counter()
+
+        for table in sorted(width2_by_table):
+            if len(added) >= round_width2_reserve:
+                break
+            if selected_width2_counts[table] >= per_table_width2_reserve:
+                continue
+            for cand in width2_by_table[table]:
+                if len(added) >= round_width2_reserve or selected_width2_counts[table] >= per_table_width2_reserve:
+                    break
+                if cand.key in selected_keys:
+                    continue
+                unordered = frozenset(cand.key[1])
+                if unordered in selected_unordered[table]:
+                    dedup_count += 1
+                    continue
+
+                must_displace = len(selected) >= limit or int(table_counts.get(table, 0)) >= self.round_table_cap
+                remove_idx = None
+                if must_displace:
+                    same_table_width1 = [
+                        (idx, existing)
+                        for idx, existing in enumerate(selected)
+                        if existing.key[0] == table and len(existing.key[1]) == 1
+                    ]
+                    if not same_table_width1:
+                        block_reasons["no_same_table_width1"] += 1
+                        continue
+                    remove_idx, _remove_cand = sorted(
+                        same_table_width1,
+                        key=lambda item: (float(item[1].score), item[1].key),
+                    )[0]
+
+                if remove_idx is None and (len(selected) + 1 > limit or int(table_counts.get(table, 0)) + 1 > self.round_table_cap):
+                    block_reasons["capacity_exceeded"] += 1
+                    continue
+
+                if remove_idx is not None:
+                    removed = selected.pop(remove_idx)
+                    selected_keys.discard(removed.key)
+                    displaced.append(removed.key)
+                    # Same-table displacement keeps table_counts unchanged.
+                else:
+                    table_counts[table] = int(table_counts.get(table, 0)) + 1
+
+                selected.append(cand)
+                selected_keys.add(cand.key)
+                selected_unordered[table].add(unordered)
+                selected_width2_counts[table] += 1
+                added.add(cand.key)
+
+        return {
+            "added": added,
+            "displaced": displaced,
+            "dedup_count": int(dedup_count),
+            "block_reasons": block_reasons,
         }
 
     def _make_seed_states(
@@ -566,9 +747,14 @@ class MCIGCandidateGenerator:
         seed_seen_rounds: Optional[Dict[IndexKey, Set[int]]] = None,
         seed_normalized_benefit: Optional[Dict[IndexKey, float]] = None,
         pair_supply_ceiling_enabled: bool = False,
+        pair_supply_fairness_enabled: bool = False,
+        pair_supply_per_table_width2_reserve: int = 1,
+        pair_supply_round_width2_reserve: int = 4,
         target_pair_audit: Optional[Set[IndexKey]] = None,
         **_ignored,
     ) -> GenerationResult:
+        if pair_supply_ceiling_enabled and pair_supply_fairness_enabled:
+            raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive")
         start = time.perf_counter()
         per_query: List[Set[IndexKey]] = []
         merged: Dict[IndexKey, Candidate] = {}
@@ -587,6 +773,9 @@ class MCIGCandidateGenerator:
         perquery_width2_ceiling_added: Set[IndexKey] = set()
         perquery_dropped_by_table = Counter()
         pair_supply_ceiling_enabled = bool(pair_supply_ceiling_enabled)
+        pair_supply_fairness_enabled = bool(pair_supply_fairness_enabled)
+        pair_supply_per_table_width2_reserve = int(pair_supply_per_table_width2_reserve)
+        pair_supply_round_width2_reserve = int(pair_supply_round_width2_reserve)
         target_pairs = set(target_pair_audit or set())
         normal_merged: Optional[Dict[IndexKey, Candidate]] = {} if pair_supply_ceiling_enabled else None
         evidences, parse_status = self._extract_evidence(workload_lines)
@@ -654,6 +843,7 @@ class MCIGCandidateGenerator:
                 normal_merged,
                 topk,
                 pair_supply_ceiling_enabled=False,
+                pair_supply_fairness_enabled=False,
             )
             normal_topk_set = {cand.key for cand in normal_selected}
 
@@ -664,15 +854,25 @@ class MCIGCandidateGenerator:
             merged,
             topk,
             pair_supply_ceiling_enabled=pair_supply_ceiling_enabled,
+            pair_supply_fairness_enabled=pair_supply_fairness_enabled,
+            pair_supply_per_table_width2_reserve=pair_supply_per_table_width2_reserve,
+            pair_supply_round_width2_reserve=pair_supply_round_width2_reserve,
+            grow_meta=grow_meta,
         )
         round_width2_before = set(round_diag.get("width2_before", set()) or set())
         round_width2_after = set(round_diag.get("width2_after", set()) or set())
         round_width2_dropped = set(round_diag.get("width2_dropped", set()) or set())
         round_width2_ceiling_added = set(round_diag.get("ceiling_added_width2", set()) or set())
+        round_width2_fairness_added = set(round_diag.get("fairness_added_width2", set()) or set())
+        fairness_displaced_width1 = list(round_diag.get("fairness_displaced_width1_list", []) or [])
+        fairness_rescued_by_table = Counter(round_diag.get("fairness_rescued_by_table", Counter()) or Counter())
+        fairness_block_reasons = Counter(round_diag.get("fairness_block_reasons", Counter()) or Counter())
         round_dropped_by_table = Counter(key[0] for key in round_width2_dropped)
 
         topk_set = {c.key for c in selected}
-        actual_delta_set = (topk_set - normal_topk_set) if pair_supply_ceiling_enabled else set()
+        if pair_supply_fairness_enabled:
+            normal_topk_set = set(round_diag.get("no_feature_topk_set", set()) or set())
+        actual_delta_set = (topk_set - normal_topk_set) if (pair_supply_ceiling_enabled or pair_supply_fairness_enabled) else set()
         candidate_count_delta = len(actual_delta_set)
         recovered_targets = target_pairs & actual_delta_set
         score_map = {c.key: c.score for c in selected}
@@ -750,9 +950,23 @@ class MCIGCandidateGenerator:
             "pair_supply_ceiling_width2_added_perquery": int(perquery_width2_ceiling_added_events),
             "pair_supply_ceiling_width2_added_round": int(len(round_width2_ceiling_added)),
             "pair_supply_ceiling_width2_survived_count": int(len(round_width2_after)),
-            "pair_supply_ceiling_target_pairs_recovered": int(len(recovered_targets)),
-            "pair_supply_ceiling_candidate_count_delta": int(candidate_count_delta),
-            "pair_supply_ceiling_examples": self._serialize_examples(actual_delta_set),
+            "pair_supply_ceiling_target_pairs_recovered": int(len(recovered_targets)) if pair_supply_ceiling_enabled else 0,
+            "pair_supply_ceiling_candidate_count_delta": int(candidate_count_delta) if pair_supply_ceiling_enabled else 0,
+            "pair_supply_ceiling_examples": self._serialize_examples(actual_delta_set) if pair_supply_ceiling_enabled else "",
+            "pair_supply_fairness_enabled": int(pair_supply_fairness_enabled),
+            "pair_supply_per_table_width2_reserve": int(pair_supply_per_table_width2_reserve),
+            "pair_supply_round_width2_reserve": int(pair_supply_round_width2_reserve),
+            "pair_supply_fairness_applied_count": int(len(round_width2_fairness_added)),
+            "pair_supply_fairness_rescued_width2_count": int(len(round_width2_fairness_added)),
+            "pair_supply_fairness_rescued_pairs": self._serialize_examples(round_width2_fairness_added),
+            "pair_supply_fairness_rescued_by_table": self._serialize_by_table(fairness_rescued_by_table),
+            "pair_supply_fairness_displaced_width1_count": int(len(fairness_displaced_width1)),
+            "pair_supply_fairness_displaced_width1_keys": self._serialize_examples(fairness_displaced_width1),
+            "pair_supply_fairness_columnset_dedup_count": int(round_diag.get("fairness_columnset_dedup_count", 0) or 0),
+            "pair_supply_fairness_block_reason": self._serialize_counter(fairness_block_reasons),
+            "pair_supply_fairness_candidate_count_delta": int(candidate_count_delta) if pair_supply_fairness_enabled else 0,
+            "pair_supply_fairness_target_pairs_recovered": int(len(recovered_targets)) if pair_supply_fairness_enabled else 0,
+            "pair_supply_fairness_target_pairs_recovered_examples": self._serialize_examples(recovered_targets) if pair_supply_fairness_enabled else "",
             "width1_ranked_ahead_of_best_width2": int(round_diag.get("width1_ranked_ahead_of_best_width2", 0)),
             "best_width2_family_score": float(round_diag.get("best_width2_family_score", 0.0)),
             "max_family_score_of_displacing_width1": float(round_diag.get("max_family_score_of_displacing_width1", 0.0)),

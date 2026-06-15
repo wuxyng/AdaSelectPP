@@ -110,6 +110,9 @@ class AdaSelect:
         self.wdcg_enabled = True
         self.replacement_overlay_enabled = False
         self.pair_supply_ceiling_enabled = False
+        self.pair_supply_fairness_enabled = False
+        self.pair_supply_per_table_width2_reserve = 1
+        self.pair_supply_round_width2_reserve = 4
         self.target_pair_audit: Set[IndexKey] = set()
         self.log_candidate_sample = 12
         self.candidate_topk_factor = 4
@@ -283,6 +286,17 @@ class AdaSelect:
         self.pair_supply_ceiling_enabled = coerce_bool_flag(
             cfg.get("pair_supply_ceiling_enabled", self.pair_supply_ceiling_enabled)
         )
+        self.pair_supply_fairness_enabled = coerce_bool_flag(
+            cfg.get("pair_supply_fairness_enabled", self.pair_supply_fairness_enabled)
+        )
+        self.pair_supply_per_table_width2_reserve = int(
+            cfg.get("pair_supply_per_table_width2_reserve", self.pair_supply_per_table_width2_reserve)
+        )
+        self.pair_supply_round_width2_reserve = int(
+            cfg.get("pair_supply_round_width2_reserve", self.pair_supply_round_width2_reserve)
+        )
+        if self.pair_supply_ceiling_enabled and self.pair_supply_fairness_enabled:
+            raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive")
         self.target_pair_audit = parse_target_pair_audit(cfg.get("target_pair_audit", ""))
         self.log_candidate_sample = int(cfg.get("log_candidate_sample", self.log_candidate_sample))
         self.candidate_topk_factor = int(cfg.get("candidate_topk_factor", self.candidate_topk_factor))
@@ -305,6 +319,9 @@ class AdaSelect:
             "wdcg_enabled": self.wdcg_enabled,
             "replacement_overlay_enabled": self.replacement_overlay_enabled,
             "pair_supply_ceiling_enabled": self.pair_supply_ceiling_enabled,
+            "pair_supply_fairness_enabled": self.pair_supply_fairness_enabled,
+            "pair_supply_per_table_width2_reserve": self.pair_supply_per_table_width2_reserve,
+            "pair_supply_round_width2_reserve": self.pair_supply_round_width2_reserve,
             "target_pair_audit": self._fmt_config(self.target_pair_audit),
             "benefit_decay_fixed": self.benefit_decay_fixed,
             "candidate_topk_factor": self.candidate_topk_factor,
@@ -598,6 +615,9 @@ class AdaSelect:
             seed_seen_rounds=self.idx_seen_rounds,
             seed_normalized_benefit=seed_norm,
             pair_supply_ceiling_enabled=self.pair_supply_ceiling_enabled,
+            pair_supply_fairness_enabled=self.pair_supply_fairness_enabled,
+            pair_supply_per_table_width2_reserve=self.pair_supply_per_table_width2_reserve,
+            pair_supply_round_width2_reserve=self.pair_supply_round_width2_reserve,
             target_pair_audit=set(self.target_pair_audit),
         )
         query_indexes = [set(x) for x in (res.query_indexes or [])]
