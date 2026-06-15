@@ -448,6 +448,7 @@ class AdaSelect:
         self._last_structural_pair_candidate_set = set()
         self._last_structural_pair_lane_set = set()
         self._last_pair_fate_map = {}
+        self._last_materialization_gap_map = {}
         self._last_overlay_opportunity_pairs = set()
         self._last_overlay_admitted_pairs = set()
         self._last_overlay_fired_pairs = set()
@@ -1364,6 +1365,149 @@ class AdaSelect:
         self._last_wdcg_stats.update(stats)
 
     @staticmethod
+    def _materialization_example_keys(diag_map: Dict[IndexKey, Dict[str, Any]], reason: str, limit: int = 5) -> str:
+        items = sorted(
+            key for key, diag in diag_map.items()
+            if isinstance(diag, dict) and str(diag.get("mat_gap_reason", "")) == reason
+        )
+        return ";".join(AdaSelect._fmt_index_key(k) for k in items[:limit])
+
+    def _replacement_utility_by_pair(self) -> Dict[IndexKey, float]:
+        by_pair: Dict[IndexKey, float] = {}
+        for action in getattr(self, "_last_shadow_action_rows", []) or []:
+            if not isinstance(action, dict) or str(action.get("action_type", "")) != "REPLACE":
+                continue
+            pair = action.get("index_key", None)
+            if not isinstance(pair, tuple):
+                continue
+            try:
+                utility = float(action.get("action_utility", 0.0) or 0.0)
+            except Exception:
+                utility = 0.0
+            previous = by_pair.get(pair)
+            if previous is None or utility > previous:
+                by_pair[pair] = utility
+        return by_pair
+
+    def _record_materialization_gap_diagnostics(
+        self,
+        *,
+        old_conf: Set[IndexKey],
+        candidate_conf: Set[IndexKey],
+        selected_conf: Set[IndexKey],
+        final_conf: Set[IndexKey],
+        norm_map: Dict[IndexKey, float],
+        net_map: Dict[IndexKey, float],
+    ) -> None:
+        """Classify why postround width-2 pairs did or did not materialize.
+
+        This reads only already-computed main-path benefits and replacement
+        diagnostics.  It deliberately performs no extra DB or what-if calls.
+        """
+        supply = self._pair_supply_sets()
+        postround = set(supply.get("postround_width2", set()))
+        targets = set(getattr(self, "target_pair_audit", set()) or set())
+        pairs = {
+            pair for pair in (postround | targets)
+            if isinstance(pair, tuple) and len(pair) == 2 and isinstance(pair[1], tuple) and len(pair[1]) == 2
+        }
+        evaluated = set(getattr(self, "_last_evaluated_set", set()) or set())
+        replacement_map = getattr(self, "_last_structural_pair_replacement_map", {}) or {}
+        fired = set(getattr(self, "_last_overlay_fired_pairs", set()) or set())
+        replacement_utility = self._replacement_utility_by_pair()
+        gap_map: Dict[IndexKey, Dict[str, Any]] = {}
+
+        for pair in sorted(pairs, key=self._fmt_index_key):
+            prefix = self._left_prefix_single(pair)
+            repl = replacement_map.get(pair, {}) if isinstance(replacement_map, dict) else {}
+            repl_available = isinstance(repl, dict) and bool(repl)
+            try:
+                repl_net = float(repl.get("replacement_net_benefit", 0.0) or 0.0) if repl_available else 0.0
+            except Exception:
+                repl_net = 0.0
+            try:
+                main_net = float(net_map.get(pair, 0.0) or 0.0)
+            except Exception:
+                main_net = 0.0
+
+            in_postround = pair in postround
+            in_candidate = pair in candidate_conf
+            in_final = pair in final_conf
+            is_evaluated = pair in evaluated
+            prefix_in_old = bool(prefix in old_conf) if prefix is not None else False
+            prefix_in_candidate = bool(prefix in candidate_conf) if prefix is not None else False
+
+            if pair in fired:
+                reason = "overlay_applied"
+            elif in_final:
+                reason = "already_final"
+            elif not in_postround:
+                reason = "not_postround"
+            elif not is_evaluated:
+                reason = "eval_gap"
+            elif (prefix_in_old or prefix_in_candidate) and main_net <= 0.0 and repl_net > 0.0:
+                reason = "prefix_shadowing_likely"
+            elif main_net <= 0.0 and repl_net > 0.0:
+                reason = "replacement_positive_main_nonpositive"
+            elif main_net > 0.0 and not in_candidate and not in_final:
+                reason = "main_positive_but_not_selected"
+            elif in_candidate and not in_final and set(selected_conf) == set(old_conf):
+                reason = "candidate_conf_rejected_by_beta"
+            else:
+                reason = "unknown"
+
+            gap_map[pair] = {
+                "mat_pair_key": self._fmt_index_key(pair),
+                "mat_pair_in_postround": int(in_postround),
+                "mat_pair_in_candidate_conf": int(in_candidate),
+                "mat_pair_in_final_conf": int(in_final),
+                "mat_pair_evaluated": int(is_evaluated),
+                "mat_pair_main_raw_benefit": float(self.columns_benefit.get(pair, 0.0)),
+                "mat_pair_main_normalized_benefit": float(norm_map.get(pair, 0.0) or 0.0),
+                "mat_pair_main_net_utility": main_net,
+                "mat_pair_creation_cost": float(self._creation_cost(pair)),
+                "mat_replacement_diag_available": int(repl_available),
+                "mat_replacement_net_benefit": repl.get("replacement_net_benefit", "") if repl_available else "",
+                "mat_replacement_utility": replacement_utility.get(pair, ""),
+                "mat_left_prefix": self._fmt_index_key(prefix) if prefix is not None else "",
+                "mat_left_prefix_in_old_conf": int(prefix_in_old),
+                "mat_left_prefix_in_candidate_conf": int(prefix_in_candidate),
+                "mat_left_prefix_in_final_conf": int(prefix in final_conf) if prefix is not None else 0,
+                "mat_left_prefix_net_utility": net_map.get(prefix, "") if prefix is not None else "",
+                "mat_gap_reason": reason,
+            }
+
+        self._last_materialization_gap_map = gap_map
+        reasons = (
+            "not_postround",
+            "eval_gap",
+            "prefix_shadowing_likely",
+            "replacement_positive_main_nonpositive",
+            "main_positive_but_not_selected",
+            "candidate_conf_rejected_by_beta",
+            "already_final",
+            "overlay_applied",
+            "unknown",
+        )
+        stats: Dict[str, Any] = {"materialization_gap_pair_count": int(len(gap_map))}
+        for reason in reasons:
+            stats[f"materialization_gap_{reason}_count"] = int(
+                sum(1 for diag in gap_map.values() if diag.get("mat_gap_reason") == reason)
+            )
+        stats.update({
+            "materialization_gap_not_postround_examples": self._materialization_example_keys(gap_map, "not_postround"),
+            "materialization_gap_eval_gap_examples": self._materialization_example_keys(gap_map, "eval_gap"),
+            "materialization_gap_prefix_shadowing_examples": self._materialization_example_keys(gap_map, "prefix_shadowing_likely"),
+            "materialization_gap_replacement_positive_main_nonpositive_examples": self._materialization_example_keys(
+                gap_map, "replacement_positive_main_nonpositive"
+            ),
+            "materialization_gap_main_positive_not_selected_examples": self._materialization_example_keys(
+                gap_map, "main_positive_but_not_selected"
+            ),
+        })
+        self._last_wdcg_stats.update(stats)
+
+    @staticmethod
     def _first_overlay_block_reason(reasons: Set[str]) -> str:
         for reason in (
             "no_structural_diag_this_round",
@@ -1666,6 +1810,14 @@ class AdaSelect:
         self._record_pair_supply_diagnostics(
             selected_conf=pre_overlay_selected_conf,
             final_conf=set(selected_conf),
+        )
+        self._record_materialization_gap_diagnostics(
+            old_conf=old_canon,
+            candidate_conf=set(candidate_conf),
+            selected_conf=pre_overlay_selected_conf,
+            final_conf=set(selected_conf),
+            norm_map=normalized,
+            net_map=net,
         )
         for diag in getattr(self, "_last_structural_pair_replacement_map", {}).values():
             if not isinstance(diag, dict):
