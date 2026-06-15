@@ -103,6 +103,15 @@ NUMERIC_COLUMNS: Sequence[str] = (
     "target_pair_lane_admitted_count",
     "target_pair_selected_count",
     "target_pair_final_count",
+    "materialization_gap_pair_count",
+    "materialization_gap_eval_gap_count",
+    "materialization_gap_prefix_shadowing_likely_count",
+    "materialization_gap_replacement_positive_main_nonpositive_count",
+    "materialization_gap_main_positive_but_not_selected_count",
+    "materialization_gap_candidate_conf_rejected_by_beta_count",
+    "materialization_gap_already_final_count",
+    "materialization_gap_overlay_applied_count",
+    "materialization_gap_unknown_count",
 )
 
 TOTAL_COLUMNS: Sequence[str] = (
@@ -309,6 +318,19 @@ def _summarize_pair_supply_metrics(rows: List[Dict[str, str]]) -> List[str]:
         f"- overlay_blocked_by_lane_pair_total: {_fmt(sum(_as_float(r.get('overlay_blocked_by_lane_count')) for r in rows))}",
         f"- overlay_blocked_by_eligibility_pair_total: {_fmt(sum(_as_float(r.get('overlay_blocked_by_eligibility_count')) for r in rows))}",
         f"- overlay_fired_pair_total: {_fmt(sum(_as_float(r.get('overlay_fired_pair_count')) for r in rows))}",
+        f"- materialization_gap_pair_total: {_fmt(sum(_as_float(r.get('materialization_gap_pair_count')) for r in rows))}",
+        f"- materialization_gap_eval_gap_total: {_fmt(sum(_as_float(r.get('materialization_gap_eval_gap_count')) for r in rows))}",
+        f"- materialization_gap_prefix_shadowing_likely_total: {_fmt(sum(_as_float(r.get('materialization_gap_prefix_shadowing_likely_count')) for r in rows))}",
+        f"- materialization_gap_replacement_positive_main_nonpositive_total: {_fmt(sum(_as_float(r.get('materialization_gap_replacement_positive_main_nonpositive_count')) for r in rows))}",
+        f"- materialization_gap_main_positive_but_not_selected_total: {_fmt(sum(_as_float(r.get('materialization_gap_main_positive_but_not_selected_count')) for r in rows))}",
+        f"- materialization_gap_candidate_conf_rejected_by_beta_total: {_fmt(sum(_as_float(r.get('materialization_gap_candidate_conf_rejected_by_beta_count')) for r in rows))}",
+        f"- materialization_gap_already_final_total: {_fmt(sum(_as_float(r.get('materialization_gap_already_final_count')) for r in rows))}",
+        f"- materialization_gap_overlay_applied_total: {_fmt(sum(_as_float(r.get('materialization_gap_overlay_applied_count')) for r in rows))}",
+        f"- materialization_gap_unknown_total: {_fmt(sum(_as_float(r.get('materialization_gap_unknown_count')) for r in rows))}",
+        f"- materialization_gap_eval_gap_examples: {_top_counter(_example_counter(rows, 'materialization_gap_eval_gap_examples'))}",
+        f"- materialization_gap_prefix_shadowing_examples: {_top_counter(_example_counter(rows, 'materialization_gap_prefix_shadowing_examples'))}",
+        f"- materialization_gap_replacement_positive_main_nonpositive_examples: {_top_counter(_example_counter(rows, 'materialization_gap_replacement_positive_main_nonpositive_examples'))}",
+        f"- materialization_gap_main_positive_not_selected_examples: {_top_counter(_example_counter(rows, 'materialization_gap_main_positive_not_selected_examples'))}",
     ]
     for prefix in fate_fields:
         lines.append(f"- {prefix}_total: {_fmt(sum(_as_float(r.get(prefix + '_count')) for r in rows))}")
