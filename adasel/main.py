@@ -625,6 +625,19 @@ def main() -> int:
             "target_pair_dropped_perquery_examples",
             "target_pair_dropped_round_examples",
             "target_pair_fate_summary",
+            "materialization_gap_pair_count",
+            "materialization_gap_eval_gap_count",
+            "materialization_gap_prefix_shadowing_likely_count",
+            "materialization_gap_replacement_positive_main_nonpositive_count",
+            "materialization_gap_main_positive_but_not_selected_count",
+            "materialization_gap_candidate_conf_rejected_by_beta_count",
+            "materialization_gap_already_final_count",
+            "materialization_gap_overlay_applied_count",
+            "materialization_gap_unknown_count",
+            "materialization_gap_eval_gap_examples",
+            "materialization_gap_prefix_shadowing_examples",
+            "materialization_gap_replacement_positive_main_nonpositive_examples",
+            "materialization_gap_main_positive_not_selected_examples",
         ]
         shadow_metrics = {key: wdcg_stats.get(key, None) for key in shadow_metric_keys}
         overlay_metrics = {key: wdcg_stats.get(key, None) for key in overlay_metric_keys}
