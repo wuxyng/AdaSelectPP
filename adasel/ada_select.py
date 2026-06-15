@@ -1479,6 +1479,7 @@ class AdaSelect:
 
         self._last_materialization_gap_map = gap_map
         reasons = (
+            "not_postround",
             "eval_gap",
             "prefix_shadowing_likely",
             "replacement_positive_main_nonpositive",
@@ -1494,6 +1495,7 @@ class AdaSelect:
                 sum(1 for diag in gap_map.values() if diag.get("mat_gap_reason") == reason)
             )
         stats.update({
+            "materialization_gap_not_postround_examples": self._materialization_example_keys(gap_map, "not_postround"),
             "materialization_gap_eval_gap_examples": self._materialization_example_keys(gap_map, "eval_gap"),
             "materialization_gap_prefix_shadowing_examples": self._materialization_example_keys(gap_map, "prefix_shadowing_likely"),
             "materialization_gap_replacement_positive_main_nonpositive_examples": self._materialization_example_keys(
