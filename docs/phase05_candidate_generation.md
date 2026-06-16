@@ -27,7 +27,13 @@ cost before the tuner has enough online evidence to rank them.
 
 ## Probe-Grow-Fair
 
-`probe_grow_fair` is the named Phase 0.5 candidate-generation mode. It combines
+`probe_grow_fair` is the canonical name for the bounded width-2 fairness
+candidate-generation path. `PAIR_SUPPLY_FAIRNESS=1` and
+`--pair_supply_fairness_enabled 1` remain backward-compatible aliases; when
+they are used, the effective candidate generation mode is reported as
+`probe_grow_fair`.
+
+`probe_grow_fair` combines
 the existing pieces that were developed through the Phase 0.5 PR sequence:
 
 - single-column probe rounds;
@@ -81,4 +87,3 @@ The following are intentionally outside `probe_grow_fair`:
 
 Those belong to later phases or separate diagnostic PRs. Phase 0.5 candidate
 generation ends at supplying a bounded candidate set.
-
