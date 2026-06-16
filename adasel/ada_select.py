@@ -27,7 +27,12 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from adaselect_pp.common import sql_only
 from util.benefit_normalizer import BenefitNormalizer
 from adaselect_pp.candidate_gen_v2 import MCIGCandidateGenerator
-from adasel.config_flags import coerce_bool_flag, normalize_candidate_generation_mode, parse_target_pair_audit
+from adasel.config_flags import (
+    canonicalize_candidate_generation_settings,
+    coerce_bool_flag,
+    normalize_candidate_generation_mode,
+    parse_target_pair_audit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +302,10 @@ class AdaSelect:
                 "pair_supply_fairness_enabled",
                 self.pair_supply_fairness_enabled or self.candidate_generation_mode == "probe_grow_fair",
             )
+        )
+        self.candidate_generation_mode, self.pair_supply_fairness_enabled = canonicalize_candidate_generation_settings(
+            self.candidate_generation_mode,
+            self.pair_supply_fairness_enabled,
         )
         self.pair_supply_per_table_width2_reserve = int(
             cfg.get("pair_supply_per_table_width2_reserve", self.pair_supply_per_table_width2_reserve)

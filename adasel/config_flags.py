@@ -88,6 +88,14 @@ def resolve_candidate_generation_mode(cli_value, env_value, config_value, defaul
     return normalize_candidate_generation_mode(default, default=default)
 
 
+def canonicalize_candidate_generation_settings(mode, fairness_enabled):
+    mode = normalize_candidate_generation_mode(mode, default="probe_grow")
+    fairness = coerce_bool_flag(fairness_enabled)
+    if mode == "probe_grow_fair" or fairness:
+        return "probe_grow_fair", True
+    return "probe_grow", False
+
+
 def resolve_int_flag(cli_value, env_value, config_value, default: int) -> int:
     if cli_value is not None:
         return int(cli_value)

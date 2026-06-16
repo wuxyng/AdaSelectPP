@@ -31,6 +31,7 @@ from util.trace_recorder import TraceRecorder
 from util.logging_utils import setup_logging
 from adasel.ada_select import AdaSelect
 from adasel.config_flags import (
+    canonicalize_candidate_generation_settings,
     resolve_candidate_generation_mode,
     resolve_fairness_eval_lane_enabled,
     resolve_int_flag,
@@ -283,6 +284,10 @@ def main() -> int:
         os.environ.get("PAIR_SUPPLY_FAIRNESS"),
         cfg_obj.get("pair_supply_fairness_enabled"),
         default=(cfg_obj["candidate_generation_mode"] == "probe_grow_fair"),
+    )
+    cfg_obj["candidate_generation_mode"], cfg_obj["pair_supply_fairness_enabled"] = canonicalize_candidate_generation_settings(
+        cfg_obj["candidate_generation_mode"],
+        cfg_obj["pair_supply_fairness_enabled"],
     )
     cfg_obj["pair_supply_per_table_width2_reserve"] = resolve_int_flag(
         args.pair_supply_per_table_width2_reserve,

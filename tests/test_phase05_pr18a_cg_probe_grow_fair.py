@@ -1,6 +1,12 @@
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
-from adasel.config_flags import resolve_candidate_generation_mode
+from adasel.ada_select import AdaSelect
+from adasel.config_flags import canonicalize_candidate_generation_settings, resolve_candidate_generation_mode
 from adaselect_pp.candidate_gen_v2.generator import MCIGCandidateGenerator
 from adaselect_pp.candidate_gen_v2.types import Candidate, QueryEvidence
 
@@ -54,6 +60,73 @@ def test_candidate_generation_mode_resolution_precedence():
         resolve_candidate_generation_mode("wide2_enum", None, None)
 
 
+def test_candidate_generation_settings_canonicalize_both_directions():
+    assert canonicalize_candidate_generation_settings("probe_grow_fair", 0) == ("probe_grow_fair", True)
+    assert canonicalize_candidate_generation_settings("probe_grow", 1) == ("probe_grow_fair", True)
+    assert canonicalize_candidate_generation_settings("probe_grow", 0) == ("probe_grow", False)
+
+
+def _bare_tuner_for_cfg():
+    tuner = AdaSelect.__new__(AdaSelect)
+    tuner.max_num = 10
+    tuner.alpha_init = 0.65
+    tuner.beta = 1.1
+    tuner.ratio = 0.5
+    tuner.timeout = 30000
+    tuner.min_width = 1
+    tuner.max_width = 2
+    tuner.transition_mode = "symmetric"
+    tuner.rsfe_decay = 0.9
+    tuner.lambda_policy = "adaptive"
+    tuner.fixed_lambda = 0.65
+    tuner.benefit_decay = None
+    tuner.benefit_decay_fixed = 0.95
+    tuner.beta_error = 0.2
+    tuner.lambda_min = 0.2
+    tuner.lambda_max = 0.95
+    tuner.ts_low = 0.5
+    tuner.ts_high = 2.0
+    tuner.ts_gate_regress = 0.05
+    tuner.ts_mad_floor_rel = 1e-6
+    tuner.ts_sign_decay = 0.9
+    tuner.wdcg_enabled = True
+    tuner.replacement_overlay_enabled = False
+    tuner.pair_supply_ceiling_enabled = False
+    tuner.candidate_generation_mode = "probe_grow"
+    tuner.pair_supply_fairness_enabled = False
+    tuner.pair_supply_per_table_width2_reserve = 1
+    tuner.pair_supply_round_width2_reserve = 4
+    tuner.fairness_eval_lane_enabled = False
+    tuner.fairness_eval_lane_quota = 1
+    tuner.target_pair_audit = set()
+    tuner.log_candidate_sample = 12
+    tuner.candidate_topk_factor = 4
+    tuner.candidate_topk_min_extra = 6
+    tuner.candidate_per_query_cap = 12
+    tuner.candidate_per_table_cap = 4
+    tuner.candidate_round_table_cap = 6
+    tuner.indexable_columns_path = ""
+    tuner._cfg_effective = {}
+    return tuner
+
+
+def test_adaselect_load_cfg_canonicalizes_mode_and_fairness():
+    tuner = _bare_tuner_for_cfg()
+    tuner._load_cfg({"candidate_generation_mode": "probe_grow_fair", "pair_supply_fairness_enabled": 0})
+    assert tuner.candidate_generation_mode == "probe_grow_fair"
+    assert tuner.pair_supply_fairness_enabled is True
+
+    tuner = _bare_tuner_for_cfg()
+    tuner._load_cfg({"candidate_generation_mode": "probe_grow", "pair_supply_fairness_enabled": 1})
+    assert tuner.candidate_generation_mode == "probe_grow_fair"
+    assert tuner.pair_supply_fairness_enabled is True
+
+    tuner = _bare_tuner_for_cfg()
+    tuner._load_cfg({})
+    assert tuner.candidate_generation_mode == "probe_grow"
+    assert tuner.pair_supply_fairness_enabled is False
+
+
 def test_default_probe_grow_behavior_unchanged_when_mode_disabled():
     gen = _generator(round_table_cap=2)
     _wire_fake_generation(gen, {
@@ -101,6 +174,27 @@ def test_probe_grow_fair_mode_recovers_width2_under_cap_and_keeps_width_scope():
     assert res.stats["cg_width2_fairness_added_pairs"] == "t(a,b)"
     assert res.stats["cg_target_pair_postround_coverage_count"] == 1
     assert res.stats["cg_candidate_budget_delta"] == 1
+
+
+def test_generator_stats_canonicalize_legacy_fairness_alias():
+    gen = _generator(round_table_cap=2)
+    _wire_fake_generation(gen, {
+        A: _candidate(A, score=10),
+        B: _candidate(B, score=1),
+        PAIR_AB: _candidate(PAIR_AB, "EQ_RANGE", score=100),
+    })
+
+    res = gen.generate(
+        ["q0"],
+        topk=2,
+        workload_count=2,
+        candidate_generation_mode="probe_grow",
+        pair_supply_fairness_enabled=True,
+        pair_supply_per_table_width2_reserve=1,
+    )
+
+    assert res.stats["candidate_generation_mode"] == "probe_grow_fair"
+    assert res.stats["pair_supply_fairness_enabled"] == 1
 
 
 def test_probe_grow_fair_table_cap_remains_bounded():
@@ -194,3 +288,29 @@ def test_probe_grow_fair_and_ceiling_are_mutually_exclusive():
             candidate_generation_mode="probe_grow_fair",
             pair_supply_ceiling_enabled=True,
         )
+
+
+def test_legacy_runner_dry_run_canonicalizes_probe_grow_fair_metadata_and_command():
+    if os.name == "nt":
+        pytest.skip("Windows checkout uses CRLF shell scripts; runner DRY_RUN is validated on Linux")
+    if shutil.which("bash") is None:
+        pytest.skip("bash is unavailable")
+    run_dir = Path(f"runs/pr18a_dry_run_{os.getpid()}")
+    env = {
+        **os.environ,
+        "DRY_RUN": "1",
+        "CASE_FILTER": "tpchs:random",
+        "RUN_DIR": str(run_dir),
+        "CANDIDATE_GENERATION_MODE": "probe_grow_fair",
+        "PAIR_SUPPLY_FAIRNESS": "0",
+    }
+    try:
+        subprocess.run(["bash", "scripts/server/run_phase05_legacy_params.sh"], env=env, check=True)
+        metadata = (run_dir / "tpchs_random" / "metadata.env").read_text(encoding="utf-8")
+        command = (run_dir / "tpchs_random" / "command.txt").read_text(encoding="utf-8")
+        assert "candidate_generation_mode=probe_grow_fair" in metadata
+        assert "pair_supply_fairness_enabled=1" in metadata
+        assert "--candidate_generation_mode probe_grow_fair" in command
+        assert "--pair_supply_fairness_enabled 1" in command
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
