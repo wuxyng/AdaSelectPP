@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from adaselect_pp.common import sql_only
 from util.benefit_normalizer import BenefitNormalizer
 from adaselect_pp.candidate_gen_v2 import MCIGCandidateGenerator
-from adasel.config_flags import coerce_bool_flag, parse_target_pair_audit
+from adasel.config_flags import coerce_bool_flag, normalize_candidate_generation_mode, parse_target_pair_audit
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,7 @@ class AdaSelect:
         self.wdcg_enabled = True
         self.replacement_overlay_enabled = False
         self.pair_supply_ceiling_enabled = False
+        self.candidate_generation_mode = "probe_grow"
         self.pair_supply_fairness_enabled = False
         self.pair_supply_per_table_width2_reserve = 1
         self.pair_supply_round_width2_reserve = 4
@@ -288,8 +289,14 @@ class AdaSelect:
         self.pair_supply_ceiling_enabled = coerce_bool_flag(
             cfg.get("pair_supply_ceiling_enabled", self.pair_supply_ceiling_enabled)
         )
+        self.candidate_generation_mode = normalize_candidate_generation_mode(
+            cfg.get("candidate_generation_mode", getattr(self, "candidate_generation_mode", "probe_grow"))
+        )
         self.pair_supply_fairness_enabled = coerce_bool_flag(
-            cfg.get("pair_supply_fairness_enabled", self.pair_supply_fairness_enabled)
+            cfg.get(
+                "pair_supply_fairness_enabled",
+                self.pair_supply_fairness_enabled or self.candidate_generation_mode == "probe_grow_fair",
+            )
         )
         self.pair_supply_per_table_width2_reserve = int(
             cfg.get("pair_supply_per_table_width2_reserve", self.pair_supply_per_table_width2_reserve)
@@ -325,6 +332,7 @@ class AdaSelect:
             "wdcg_enabled": self.wdcg_enabled,
             "replacement_overlay_enabled": self.replacement_overlay_enabled,
             "pair_supply_ceiling_enabled": self.pair_supply_ceiling_enabled,
+            "candidate_generation_mode": self.candidate_generation_mode,
             "pair_supply_fairness_enabled": self.pair_supply_fairness_enabled,
             "pair_supply_per_table_width2_reserve": self.pair_supply_per_table_width2_reserve,
             "pair_supply_round_width2_reserve": self.pair_supply_round_width2_reserve,
@@ -624,6 +632,7 @@ class AdaSelect:
             seed_seen_rounds=self.idx_seen_rounds,
             seed_normalized_benefit=seed_norm,
             pair_supply_ceiling_enabled=self.pair_supply_ceiling_enabled,
+            candidate_generation_mode=self.candidate_generation_mode,
             pair_supply_fairness_enabled=self.pair_supply_fairness_enabled,
             pair_supply_per_table_width2_reserve=self.pair_supply_per_table_width2_reserve,
             pair_supply_round_width2_reserve=self.pair_supply_round_width2_reserve,
