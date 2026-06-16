@@ -314,3 +314,82 @@ def test_legacy_runner_dry_run_canonicalizes_probe_grow_fair_metadata_and_comman
         assert "--pair_supply_fairness_enabled 1" in command
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_legacy_runner_dry_run_accepts_fair_alias():
+    if os.name == "nt":
+        pytest.skip("Windows checkout uses CRLF shell scripts; runner DRY_RUN is validated on Linux")
+    if shutil.which("bash") is None:
+        pytest.skip("bash is unavailable")
+    run_dir = Path(f"runs/pr18a_fair_alias_dry_run_{os.getpid()}")
+    env = {
+        **os.environ,
+        "DRY_RUN": "1",
+        "CASE_FILTER": "tpchs:random",
+        "RUN_DIR": str(run_dir),
+        "CANDIDATE_GENERATION_MODE": "fair",
+    }
+    try:
+        subprocess.run(["bash", "scripts/server/run_phase05_legacy_params.sh"], env=env, check=True)
+        metadata = (run_dir / "tpchs_random" / "metadata.env").read_text(encoding="utf-8")
+        command = (run_dir / "tpchs_random" / "command.txt").read_text(encoding="utf-8")
+        assert "candidate_generation_mode=probe_grow_fair" in metadata
+        assert "pair_supply_fairness_enabled=1" in metadata
+        assert "--candidate_generation_mode probe_grow_fair" in command
+        assert "--pair_supply_fairness_enabled 1" in command
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_legacy_runner_dry_run_rejects_bad_candidate_generation_mode():
+    if os.name == "nt":
+        pytest.skip("Windows checkout uses CRLF shell scripts; runner DRY_RUN is validated on Linux")
+    if shutil.which("bash") is None:
+        pytest.skip("bash is unavailable")
+    run_dir = Path(f"runs/pr18a_bad_mode_dry_run_{os.getpid()}")
+    env = {
+        **os.environ,
+        "DRY_RUN": "1",
+        "CASE_FILTER": "tpchs:random",
+        "RUN_DIR": str(run_dir),
+        "CANDIDATE_GENERATION_MODE": "bad_typo",
+    }
+    try:
+        proc = subprocess.run(
+            ["bash", "scripts/server/run_phase05_legacy_params.sh"],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+        assert "invalid CANDIDATE_GENERATION_MODE" in proc.stderr
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_legacy_runner_dry_run_rejects_bad_pair_supply_fairness():
+    if os.name == "nt":
+        pytest.skip("Windows checkout uses CRLF shell scripts; runner DRY_RUN is validated on Linux")
+    if shutil.which("bash") is None:
+        pytest.skip("bash is unavailable")
+    run_dir = Path(f"runs/pr18a_bad_fairness_dry_run_{os.getpid()}")
+    env = {
+        **os.environ,
+        "DRY_RUN": "1",
+        "CASE_FILTER": "tpchs:random",
+        "RUN_DIR": str(run_dir),
+        "PAIR_SUPPLY_FAIRNESS": "yes",
+    }
+    try:
+        proc = subprocess.run(
+            ["bash", "scripts/server/run_phase05_legacy_params.sh"],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+        assert "invalid PAIR_SUPPLY_FAIRNESS" in proc.stderr
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
