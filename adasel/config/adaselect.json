@@ -15,6 +15,7 @@
   "candidate_per_query_cap": 12,
   "candidate_per_table_cap": 4,
   "candidate_round_table_cap": 6,
+  "candidate_generation_mode": "probe_grow",
   "indexable_columns_path": "",
   "log_candidate_sample": 12,
   "fixed_lambda": 0.65,

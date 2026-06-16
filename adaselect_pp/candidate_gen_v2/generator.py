@@ -35,6 +35,7 @@ class MCIGCandidateGenerator:
         "STATIC_FALLBACK": 0.25,
         "VACUUM_RESCUE": 0.15,
     }
+    CANDIDATE_GENERATION_MODES = {"probe_grow", "probe_grow_fair"}
 
     def __init__(
         self,
@@ -164,6 +165,17 @@ class MCIGCandidateGenerator:
     @staticmethod
     def _is_width2(key: IndexKey) -> bool:
         return isinstance(key, tuple) and len(key) == 2 and isinstance(key[1], tuple) and len(key[1]) == 2
+
+    @classmethod
+    def _normalize_candidate_generation_mode(cls, value: object) -> str:
+        text = str(value or "probe_grow").strip().lower().replace("-", "_")
+        if text in {"", "default", "legacy", "probe", "grow"}:
+            text = "probe_grow"
+        elif text == "fair":
+            text = "probe_grow_fair"
+        if text not in cls.CANDIDATE_GENERATION_MODES:
+            raise ValueError(f"invalid candidate_generation_mode: {value!r}")
+        return text
 
     @staticmethod
     def _fmt_index_key(key: IndexKey) -> str:
@@ -746,6 +758,7 @@ class MCIGCandidateGenerator:
         seed_last_seen_round: Optional[Dict[IndexKey, int]] = None,
         seed_seen_rounds: Optional[Dict[IndexKey, Set[int]]] = None,
         seed_normalized_benefit: Optional[Dict[IndexKey, float]] = None,
+        candidate_generation_mode: str = "probe_grow",
         pair_supply_ceiling_enabled: bool = False,
         pair_supply_fairness_enabled: bool = False,
         pair_supply_per_table_width2_reserve: int = 1,
@@ -772,8 +785,11 @@ class MCIGCandidateGenerator:
         perquery_width2_ceiling_added_events = 0
         perquery_width2_ceiling_added: Set[IndexKey] = set()
         perquery_dropped_by_table = Counter()
+        candidate_generation_mode = self._normalize_candidate_generation_mode(candidate_generation_mode)
         pair_supply_ceiling_enabled = bool(pair_supply_ceiling_enabled)
-        pair_supply_fairness_enabled = bool(pair_supply_fairness_enabled)
+        pair_supply_fairness_enabled = bool(pair_supply_fairness_enabled) or candidate_generation_mode == "probe_grow_fair"
+        if pair_supply_ceiling_enabled and pair_supply_fairness_enabled:
+            raise ValueError("pair_supply_ceiling_enabled and pair_supply_fairness_enabled are mutually exclusive")
         pair_supply_per_table_width2_reserve = int(pair_supply_per_table_width2_reserve)
         pair_supply_round_width2_reserve = int(pair_supply_round_width2_reserve)
         target_pairs = set(target_pair_audit or set())
@@ -912,6 +928,7 @@ class MCIGCandidateGenerator:
         stats = {
             "candidate_count_raw": len(merged),
             "gen_mode": gen_mode,
+            "candidate_generation_mode": "probe_grow_fair" if pair_supply_fairness_enabled else candidate_generation_mode,
             "probe_rounds": self.probe_rounds,
             "workload_count": int(workload_count),
             "wdcg_pruned_count": len(topk_set),
@@ -947,6 +964,13 @@ class MCIGCandidateGenerator:
             "width2_cap_dropped_round": int(len(round_width2_dropped)),
             "width2_cap_dropped_round_by_table": self._serialize_by_table(round_dropped_by_table),
             "width2_cap_dropped_round_examples": self._serialize_examples(round_width2_dropped),
+            "cg_width2_pre_cap_count": int(len(round_width2_before)),
+            "cg_width2_post_cap_count": int(len(round_width2_after)),
+            "cg_width2_dropped_round_count": int(len(round_width2_dropped)),
+            "cg_width2_fairness_added_count": int(len(round_width2_fairness_added)),
+            "cg_width2_fairness_added_pairs": self._serialize_examples(round_width2_fairness_added),
+            "cg_target_pair_postround_coverage_count": int(len(target_pairs & round_width2_after)),
+            "cg_candidate_budget_delta": int(candidate_count_delta) if (pair_supply_ceiling_enabled or pair_supply_fairness_enabled) else 0,
             "pair_supply_ceiling_enabled": int(pair_supply_ceiling_enabled),
             "pair_supply_ceiling_width2_added_perquery": int(perquery_width2_ceiling_added_events),
             "pair_supply_ceiling_width2_added_round": int(len(round_width2_ceiling_added)),
