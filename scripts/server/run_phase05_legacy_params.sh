@@ -11,15 +11,31 @@ CASE_FILTER="${CASE_FILTER:-}"
 TRACE="${TRACE:-1}"
 REPLACEMENT_OVERLAY="${REPLACEMENT_OVERLAY:-0}"
 PAIR_SUPPLY_CEILING="${PAIR_SUPPLY_CEILING:-0}"
-CANDIDATE_GENERATION_MODE="${CANDIDATE_GENERATION_MODE:-probe_grow}"
+CANDIDATE_GENERATION_MODE="${CANDIDATE_GENERATION_MODE:-}"
 PAIR_SUPPLY_FAIRNESS="${PAIR_SUPPLY_FAIRNESS:-}"
-if [[ -z "$PAIR_SUPPLY_FAIRNESS" ]]; then
-  if [[ "$CANDIDATE_GENERATION_MODE" == "probe_grow_fair" ]]; then
-    PAIR_SUPPLY_FAIRNESS="1"
-  else
-    PAIR_SUPPLY_FAIRNESS="0"
-  fi
-fi
+
+case "$CANDIDATE_GENERATION_MODE" in
+  ""|default|legacy|probe|grow|probe_grow)
+    CANDIDATE_GENERATION_MODE="probe_grow"
+    ;;
+  fair|probe_grow_fair)
+    CANDIDATE_GENERATION_MODE="probe_grow_fair"
+    ;;
+  *)
+    echo "invalid CANDIDATE_GENERATION_MODE: $CANDIDATE_GENERATION_MODE" >&2
+    exit 2
+    ;;
+esac
+
+case "$PAIR_SUPPLY_FAIRNESS" in
+  ""|0|1)
+    ;;
+  *)
+    echo "invalid PAIR_SUPPLY_FAIRNESS: $PAIR_SUPPLY_FAIRNESS" >&2
+    exit 2
+    ;;
+esac
+
 if [[ "$CANDIDATE_GENERATION_MODE" == "probe_grow_fair" || "$PAIR_SUPPLY_FAIRNESS" == "1" ]]; then
   CANDIDATE_GENERATION_MODE="probe_grow_fair"
   PAIR_SUPPLY_FAIRNESS="1"
