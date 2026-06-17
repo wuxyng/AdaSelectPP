@@ -61,6 +61,41 @@ def resolve_fairness_eval_lane_enabled(cli_value, env_value, config_value, defau
     return bool(default)
 
 
+def normalize_candidate_generation_mode(value, default: str = "probe_grow") -> str:
+    text = str(value if value is not None else default).strip().lower().replace("-", "_")
+    aliases = {
+        "": "probe_grow",
+        "default": "probe_grow",
+        "legacy": "probe_grow",
+        "probe": "probe_grow",
+        "grow": "probe_grow",
+        "probe_grow": "probe_grow",
+        "probe_grow_fair": "probe_grow_fair",
+        "fair": "probe_grow_fair",
+    }
+    if text not in aliases:
+        raise ValueError(f"invalid candidate_generation_mode: {value!r}")
+    return aliases[text]
+
+
+def resolve_candidate_generation_mode(cli_value, env_value, config_value, default="probe_grow") -> str:
+    if cli_value is not None:
+        return normalize_candidate_generation_mode(cli_value, default=default)
+    if env_value is not None:
+        return normalize_candidate_generation_mode(env_value, default=default)
+    if config_value is not None:
+        return normalize_candidate_generation_mode(config_value, default=default)
+    return normalize_candidate_generation_mode(default, default=default)
+
+
+def canonicalize_candidate_generation_settings(mode, fairness_enabled):
+    mode = normalize_candidate_generation_mode(mode, default="probe_grow")
+    fairness = coerce_bool_flag(fairness_enabled)
+    if mode == "probe_grow_fair" or fairness:
+        return "probe_grow_fair", True
+    return "probe_grow", False
+
+
 def resolve_int_flag(cli_value, env_value, config_value, default: int) -> int:
     if cli_value is not None:
         return int(cli_value)
