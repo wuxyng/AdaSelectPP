@@ -31,6 +31,8 @@ from util.trace_recorder import TraceRecorder
 from util.logging_utils import setup_logging
 from adasel.ada_select import AdaSelect
 from adasel.config_flags import (
+    canonicalize_candidate_generation_settings,
+    resolve_candidate_generation_mode,
     resolve_fairness_eval_lane_enabled,
     resolve_int_flag,
     resolve_pair_supply_ceiling_enabled,
@@ -176,6 +178,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pair_supply_fairness_enabled", "--pair-supply-fairness-enabled", dest="pair_supply_fairness_enabled", type=int, choices=[0,1], default=None)
     p.add_argument("--pair_supply_per_table_width2_reserve", "--pair-supply-per-table-width2-reserve", dest="pair_supply_per_table_width2_reserve", type=int, choices=[1,2], default=None)
     p.add_argument("--pair_supply_round_width2_reserve", "--pair-supply-round-width2-reserve", dest="pair_supply_round_width2_reserve", type=int, default=None)
+    p.add_argument("--candidate_generation_mode", "--candidate-generation-mode", dest="candidate_generation_mode", choices=["probe_grow", "probe_grow_fair"], default=None)
     p.add_argument("--fairness_eval_lane_enabled", "--fairness-eval-lane-enabled", dest="fairness_eval_lane_enabled", type=int, choices=[0,1], default=None)
     p.add_argument("--fairness_eval_lane_quota", "--fairness-eval-lane-quota", dest="fairness_eval_lane_quota", type=int, default=None)
     p.add_argument("--target_pair_audit", "--target-pair-audit", dest="target_pair_audit", type=str, default=None)
@@ -270,11 +273,21 @@ def main() -> int:
         cfg_obj.get("pair_supply_ceiling_enabled"),
         default=False,
     )
+    cfg_obj["candidate_generation_mode"] = resolve_candidate_generation_mode(
+        args.candidate_generation_mode,
+        os.environ.get("CANDIDATE_GENERATION_MODE"),
+        cfg_obj.get("candidate_generation_mode"),
+        default="probe_grow",
+    )
     cfg_obj["pair_supply_fairness_enabled"] = resolve_pair_supply_fairness_enabled(
         args.pair_supply_fairness_enabled,
         os.environ.get("PAIR_SUPPLY_FAIRNESS"),
         cfg_obj.get("pair_supply_fairness_enabled"),
-        default=False,
+        default=(cfg_obj["candidate_generation_mode"] == "probe_grow_fair"),
+    )
+    cfg_obj["candidate_generation_mode"], cfg_obj["pair_supply_fairness_enabled"] = canonicalize_candidate_generation_settings(
+        cfg_obj["candidate_generation_mode"],
+        cfg_obj["pair_supply_fairness_enabled"],
     )
     cfg_obj["pair_supply_per_table_width2_reserve"] = resolve_int_flag(
         args.pair_supply_per_table_width2_reserve,
@@ -574,6 +587,7 @@ def main() -> int:
             "replacement_overlay_co_residency_count",
         ]
         supply_metric_keys = [
+            "candidate_generation_mode",
             "width2_candidates_perquery_before_cap",
             "width2_candidates_perquery_after_cap",
             "width2_cap_dropped_perquery_events",
@@ -584,6 +598,13 @@ def main() -> int:
             "width2_cap_dropped_round",
             "width2_cap_dropped_round_by_table",
             "width2_cap_dropped_round_examples",
+            "cg_width2_pre_cap_count",
+            "cg_width2_post_cap_count",
+            "cg_width2_dropped_round_count",
+            "cg_width2_fairness_added_count",
+            "cg_width2_fairness_added_pairs",
+            "cg_target_pair_postround_coverage_count",
+            "cg_candidate_budget_delta",
             "pair_supply_ceiling_enabled",
             "pair_supply_ceiling_width2_added_perquery",
             "pair_supply_ceiling_width2_added_round",
