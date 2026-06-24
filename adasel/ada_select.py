@@ -659,10 +659,12 @@ class AdaSelect:
 
         self._last_wdcg_score_map = dict(res.score_map or {})
         self._last_wdcg_stats = dict(res.stats or {})
+        self._last_wdcg_stats["candidate_topk"] = int(topk)
         # TraceRecorder compatibility.
         self._wdcg_gen = self.candidate_generator
 
         raw_sum = int(self._last_wdcg_stats.get("candidate_count_raw", len(set().union(*query_indexes)) if query_indexes else 0))
+        self._last_wdcg_stats.setdefault("candidate_count_raw", int(raw_sum))
         raw_counts = [len(qs) for qs in query_indexes]
         sample = sorted(appearing)[: self.log_candidate_sample]
         logger.info(
@@ -1349,6 +1351,69 @@ class AdaSelect:
             "fairness_eval_lane_nonbeneficial_count": 0,
         })
 
+    def _eval_budget_formula_label(self, appearing_count: int) -> str:
+        if int(appearing_count) <= 0:
+            return "0_no_appearing"
+        if int(self.workload_count) == 0:
+            return "appearing_count"
+        return "max(1,int(optimizer_ratio*appearing_count))"
+
+    @staticmethod
+    def _count_width(keys: Set[IndexKey], width: int) -> int:
+        return sum(
+            1
+            for key in keys
+            if isinstance(key, tuple)
+            and len(key) == 2
+            and isinstance(key[1], tuple)
+            and len(key[1]) == int(width)
+        )
+
+    def _record_eval_budget_audit(
+        self,
+        appearing: Set[IndexKey],
+        *,
+        budget: int,
+        evaluated_set: Optional[Set[IndexKey]] = None,
+    ) -> None:
+        """Record budget audit fields without influencing selection policy."""
+        appearing_set = set(appearing or set())
+        evaluated_keys = set(
+            evaluated_set
+            if evaluated_set is not None
+            else (getattr(self, "_last_evaluated_set", set()) or set())
+        )
+        evaluated_appearing = appearing_set & evaluated_keys
+        width1_appearing = self._count_width(appearing_set, 1)
+        width2_appearing = self._count_width(appearing_set, 2)
+        width1_evaluated = self._count_width(evaluated_appearing, 1)
+        width2_evaluated = self._count_width(evaluated_appearing, 2)
+        width2_ratio = (float(width2_evaluated) / float(width2_appearing)) if width2_appearing else 0.0
+        candidate_topk: Any = self._last_wdcg_stats.get("candidate_topk", "")
+        if candidate_topk == "":
+            try:
+                candidate_topk = max(
+                    1,
+                    int(getattr(self, "max_num")) * int(getattr(self, "candidate_topk_factor"))
+                    + int(getattr(self, "candidate_topk_min_extra")),
+                )
+            except Exception:
+                candidate_topk = ""
+        self._last_wdcg_stats.update({
+            "appearing_count": int(len(appearing_set)),
+            "candidate_topk": int(candidate_topk) if candidate_topk != "" else "",
+            "optimizer_ratio": float(self.ratio),
+            "eval_budget_formula": self._eval_budget_formula_label(len(appearing_set)),
+            "eval_budget": int(budget),
+            "evaluated_count": int(len(evaluated_appearing)),
+            "budgeted_out_count": int(max(0, len(appearing_set - evaluated_appearing))),
+            "width1_appearing_count": int(width1_appearing),
+            "width2_appearing_count": int(width2_appearing),
+            "width1_evaluated_count": int(width1_evaluated),
+            "width2_evaluated_count": int(width2_evaluated),
+            "width2_eval_coverage_ratio": float(width2_ratio),
+        })
+
     def _run_fairness_eval_lane(
         self,
         query_indexes: List[Set[IndexKey]],
@@ -1654,6 +1719,7 @@ class AdaSelect:
                 gap_map, "main_positive_but_not_selected"
             ),
         })
+        stats["materialization_gap_eval_gap"] = stats.get("materialization_gap_eval_gap_count", 0)
         self._last_wdcg_stats.update(stats)
 
     @staticmethod
@@ -1825,10 +1891,12 @@ class AdaSelect:
         })
         self._record_fairness_eval_lane_zero_stats()
         if not appearing:
+            self._record_eval_budget_audit(appearing, budget=0, evaluated_set=set())
             logger.info("BenefitBudget | appearing=0 base_total=%.3f", base_total)
             return
 
         budget = len(appearing) if self.workload_count == 0 else max(1, int(float(self.ratio) * len(appearing)))
+        self._record_eval_budget_audit(appearing, budget=budget, evaluated_set=set())
         # Robust log-scaled positive benefit keeps a huge winner from flattening medium positives.
         norm_benefit = self._log_positive_norm({idx: self.columns_benefit.get(idx, 0.0) for idx in appearing})
         normal_order = [idx for idx, _ in sorted(norm_benefit.items(), key=lambda kv: (-kv[1], kv[0]))]
@@ -1875,6 +1943,7 @@ class AdaSelect:
         )
         trials += fairness_eval_trials
         self._m_stats["evaluated_count"] += trials
+        self._record_eval_budget_audit(appearing, budget=budget, evaluated_set=self._last_evaluated_set)
         logger.info(
             "BenefitEval | evaluated=%d what_if_u=%d what_if_total=%d structural_pair_eval_count=%d fairness_eval_lane=%d evaluated_top=%s",
             trials, int(self._m_stats["what_if_calls"]) - before_whatif, int(self._m_stats["what_if_calls"]), structural_eval_count, fairness_eval_trials, list(self._last_evaluated_set)[: self.log_candidate_sample],
