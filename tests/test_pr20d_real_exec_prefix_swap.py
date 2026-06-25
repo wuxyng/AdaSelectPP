@@ -70,6 +70,20 @@ def test_experiment_refuses_without_explicit_physical_flag():
     )
 
 
+def test_metrics_reader_uses_executed_old_config_not_recommended_new(tmp_path):
+    metrics_path = tmp_path / "metrics.csv"
+    metrics_path.write_text(
+        "round,old,new\n"
+        "3,\"[('movie_info', ('mi_movie_id',))]\",\"[('movie_info', ('mi_movie_id', 'mi_info_type_id'))]\"\n",
+        encoding="utf-8",
+    )
+
+    configs = pr20d.read_executed_configs(metrics_path)
+
+    assert configs[3] == {PREFIX}
+    assert COMPOSITE not in configs[3]
+
+
 def test_pr20d_tool_does_not_import_online_policy_or_candidate_generation():
     source = inspect.getsource(pr20d)
     tree = ast.parse(source)
@@ -94,4 +108,3 @@ def test_pr20d_tool_does_not_import_online_policy_or_candidate_generation():
     assert "AdaSelect" not in referenced_names
     assert "MCIGCandidateGenerator" not in referenced_names
     assert "candidate_generator" not in referenced_names
-
