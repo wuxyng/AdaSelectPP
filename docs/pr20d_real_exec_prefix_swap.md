@@ -39,6 +39,11 @@ Use the same artifacts used by PR20c:
 - PR20c candidate CSV,
 - `database/workload/job_random.txt`.
 
+The baseline physical configuration for round `t` is reconstructed from the
+metrics CSV `old` column. In the online runner, workload `W_t` is executed first,
+then `old_conf` is snapshotted, then the tuner recommends `new_conf` for the
+next physical transition. Therefore `new` must not be used to replay `W_t`.
+
 The runner selects:
 
 - top predicted-winning rounds whose PR20c `best_swap_index` is
@@ -94,4 +99,3 @@ If only one round improves, the evidence is promising but needs seed/split
 replication before PR21b.
 
 PR20d still does not implement PR21 attribution or a retain/swap selector.
-
