@@ -132,14 +132,21 @@ def load_workloads(bench: str, wtype: str, round_size: int, *, root: Path = ROOT
     return workloads
 
 
-def read_baseline_configs(metrics_csv: Path) -> Dict[int, Set[IndexKey]]:
+def read_executed_configs(metrics_csv: Path) -> Dict[int, Set[IndexKey]]:
+    """Read the physical config that executed W_t from the metrics `old` column.
+
+    In `adasel/main.py`, each round first executes W_t, then snapshots
+    `old_conf`, then tunes and records `new_conf`. Therefore `old` is the
+    applied physical configuration for W_t; `new` is the recommendation applied
+    after W_t for the next round.
+    """
     configs: Dict[int, Set[IndexKey]] = {}
     with Path(metrics_csv).open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             rid_text = str(row.get("round", "")).strip()
             if not rid_text or rid_text.upper() == "SUMMARY":
                 continue
-            configs[int(float(rid_text))] = parse_config_repr(row.get("new", ""))
+            configs[int(float(rid_text))] = parse_config_repr(row.get("old", ""))
     return configs
 
 
@@ -585,7 +592,7 @@ def run_experiment(
     threshold: float,
     run_label: str,
 ) -> Tuple[Path, Path, Path]:
-    baselines = read_baseline_configs(metrics_csv)
+    baselines = read_executed_configs(metrics_csv)
     selected = select_rounds(
         rounds_csv=pr20c_rounds_csv,
         candidates_csv=pr20c_candidates_csv,
@@ -695,4 +702,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
