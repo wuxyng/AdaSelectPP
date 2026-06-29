@@ -62,6 +62,40 @@ The PR20f result should be read as a design constraint. It does not say that
 prefix swaps are low-value. It says that the online design cannot rely on a
 single scalar what-if threshold to decide accept/reject behavior.
 
+## Relation to Broader Candidate-Generation Ideas
+
+The external AdaSelectPP idea review contains several candidate-generation
+ideas that are useful only if kept selector-agnostic in the current phase.
+
+Predictive recall is useful as an offline reporting metric under delayed
+actuation. Candidate generation for round `k` should eventually be reported
+against opportunities in `W_{k+1}`, not only `W_k`, because indexes selected
+after observing one round affect later execution. This is a future reporting
+metric, not a predictive candidate synthesis module.
+
+Static structural pair evidence is also plausible as a future width-2
+candidate-generation lane. Examples include join evidence, co-access evidence,
+group evidence, and order evidence. Such a lane must remain selector-agnostic
+and width-2 bounded. It is not a current blocker because PR19 through PR20f show
+that the immediate bottleneck has shifted from candidate supply to
+configuration-level prefix-swap selection.
+
+Lane fairness has already been absorbed by `probe_grow_fair`. In Phase 0.5,
+fairness means bounded-pool reallocation, not budget expansion.
+
+The current phase should not adopt:
+
+- UCB or acquisition priority inside candidate generation;
+- cooldown, carry, or drift semantics;
+- benefit-threshold prefix domination;
+- predictive workload synthesis;
+- width-3 expansion;
+- joint candidate-generation and selector optimization.
+
+These mechanisms mix candidate generation with selector or policy
+responsibilities, or they reopen frozen Phase 2 scope. They should remain out of
+the Phase 0.5 findings closure.
+
 ## Limitations
 
 - The replay evidence is from a single benchmark/workload: JOB random.
