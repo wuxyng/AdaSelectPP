@@ -22,9 +22,10 @@ activation, the proposed offline gate must show acceptable rejection behavior,
 not only acceptance of good cases. The key operational risk is false accept:
 allowing swaps that real execution does not improve.
 
-Round 22 from PR20e motivates a nonzero gate margin. PR20c predicted a 2.62%
-target-swap win for that round, while PR20e measured a flat 0.27% real-exec
-improvement. PR20f treats this as a threshold warning case.
+Round 22 motivates a nonzero gate margin as near-margin instability evidence.
+It sits close to the gate threshold and has changed outcome label across replay
+runs, so PR20f treats it as a threshold warning case rather than as a fixed
+numeric anecdote.
 
 PR21b online activation remains blocked until PR20f shows acceptable rejection
 behavior.
@@ -75,6 +76,10 @@ PR20f creates physical experimental indexes only when
 index names, drops PR20f experimental indexes before each config materializes,
 and drops them again in `finally`. It does not touch non-PR20f indexes.
 
+Plan-use reporting checks PostgreSQL JSON plan nodes by exact `Index Name`
+equality against the deterministic experimental index name. It is not substring
+matching.
+
 ## Gate Simulation
 
 PR20f simulates gate decisions offline. It does not change online code.
@@ -110,8 +115,10 @@ write-maintenance cost.
 
 JOB is read-mostly in this diagnostic and does not validate write-heavy
 behavior. PR21b net benefit must eventually include storage and maintenance
-deltas, not query runtime alone. PR20f reports physical index-size delta as a
-proxy when PostgreSQL exposes it during the replay.
+deltas, not query runtime alone. PR20f output includes storage proxy columns,
+but the current PR20f artifacts did not populate those fields. Treat storage
+proxy values as TODO/unavailable until the size query path is fixed and
+validated.
 
 ## Outputs
 
