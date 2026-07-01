@@ -292,6 +292,12 @@ Reusable fields:
 - `query_level_concentration`;
 - query-level plan-use flags.
 
+For PR21d inventory purposes, `whatif_gain` is a design-level validation
+concept from PR21b/PR21c. In the PR20f artifacts, the closest existing field is
+`target_swap_whatif_rel_improvement` for the dominant target swap. Future
+validation reports must explicitly state which artifact field instantiates the
+design-level `whatif_gain` concept.
+
 PR20f can support rejection-arm validation design by preserving the known Gate A
 failure cases. It also provides the current replay source for:
 
@@ -390,7 +396,8 @@ activation.
 The current artifact set is not sufficient for PR21b-online because it lacks:
 
 - a validated Gate B state machine;
-- global rejection-arm coverage;
+- broader and less biased rejection-arm coverage beyond the current PR20f
+  stress subset;
 - cross-window shadow stability;
 - complete AdmissionEvidence and RetentionEvidence traces;
 - populated storage/write-maintenance/transition-cost evidence;
