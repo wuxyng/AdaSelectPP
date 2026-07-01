@@ -5,6 +5,32 @@ It is documentation only. It does not change online policy, selector logic,
 candidate generation, scoring, evaluation budget, optimizer ratio, or
 materialization behavior.
 
+## Milestone Status
+
+Phase 0.5 is closed at merge commit:
+
+```text
+1a1129ad3b2dc512a3951aca9cdada97d966e774
+```
+
+Official candidate-generation mode:
+
+```text
+candidate_generation_mode = probe_grow_fair
+```
+
+Next phase:
+
+```text
+PR21b-design/spec only
+```
+
+Blocked:
+
+```text
+PR21b-online
+```
+
 ## Evidence Chain
 
 PR19 validated candidate-pool quality for `probe_grow_fair` under a fixed
