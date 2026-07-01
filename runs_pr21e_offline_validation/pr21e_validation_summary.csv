@@ -1,0 +1,81 @@
+section,metric,value,status,notes
+schema_audit,pr20c_candidates,189,OK,runs_pr20c_swap_width2_oracle\pr20c_width2_oracle_candidates.csv
+schema_audit,pr20c_rounds,25,OK,runs_pr20c_swap_width2_oracle\pr20c_width2_oracle_rounds.csv
+schema_audit,pr20c_summary,1,OK,runs_pr20c_swap_width2_oracle\pr20c_width2_oracle_summary.csv
+schema_audit,pr20d_queries,198,OK,runs_pr20d_real_exec_prefix_swap\pr20d_real_exec_queries.csv
+schema_audit,pr20d_rounds,6,OK,runs_pr20d_real_exec_prefix_swap\pr20d_real_exec_rounds.csv
+schema_audit,pr20d_summary,1,OK,runs_pr20d_real_exec_prefix_swap\pr20d_real_exec_summary.csv
+schema_audit,pr20e_queries,429,OK,runs_pr20e_broader_prefix_swap_replay\pr20e_broader_replay_queries.csv
+schema_audit,pr20e_rounds,13,OK,runs_pr20e_broader_prefix_swap_replay\pr20e_broader_replay_rounds.csv
+schema_audit,pr20e_summary,6,OK,runs_pr20e_broader_prefix_swap_replay\pr20e_broader_replay_summary.csv
+schema_audit,pr20e_excluded_unstable,0,OK,runs_pr20e_broader_prefix_swap_replay\pr20e_broader_replay_excluded_unstable.csv
+schema_audit,pr20f_queries,561,OK,runs_pr20f_negative_control_prefix_swap_replay\pr20f_negative_control_queries.csv
+schema_audit,pr20f_rounds,68,OK,runs_pr20f_negative_control_prefix_swap_replay\pr20f_negative_control_rounds.csv
+schema_audit,pr20f_gate_metrics,4,OK,runs_pr20f_negative_control_prefix_swap_replay\pr20f_negative_control_gate_metrics.csv
+schema_audit,pr20f_summary,6,OK,runs_pr20f_negative_control_prefix_swap_replay\pr20f_negative_control_summary.csv
+schema_audit,pr20f_excluded_unstable,0,OK,runs_pr20f_negative_control_prefix_swap_replay\pr20f_negative_control_excluded_unstable.csv
+joined_recall,pr20e_to_pr20f_joined_recall,,NOT_COMPUTABLE_NO_SHARED_JOIN_KEY,No reliable cross-artifact join key is asserted for PR20e positive-arm recall and PR20f rejection-arm safety.
+primary_status,operator_ineligible,168,OK,count of proposal rows
+primary_status,online_reject_nonpositive_whatif,15,OK,count of proposal rows
+primary_status,shadow_defer_positive_whatif,93,OK,count of proposal rows
+diagnostic_flag,conflicting_real_or_shadow_evidence,25,OK,all primary statuses
+diagnostic_flag,missing_storage_or_maintenance_evidence,276,OK,all primary statuses
+diagnostic_flag,near_margin,258,OK,all primary statuses
+diagnostic_flag,not_computable_no_ground_truth_label,6,OK,all primary statuses
+diagnostic_flag,not_computable_no_shared_join_key,276,OK,all primary statuses
+diagnostic_flag,positive_whatif_with_real_support_observed,44,OK,all primary statuses
+diagnostic_flag,sign_unstable,258,OK,all primary statuses
+diagnostic_flag,single_query_dominated,86,OK,all primary statuses
+diagnostic_flag_by_primary_status,operator_ineligible:missing_storage_or_maintenance_evidence,168,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,operator_ineligible:near_margin,163,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,operator_ineligible:not_computable_no_shared_join_key,168,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,operator_ineligible:sign_unstable,163,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,online_reject_nonpositive_whatif:missing_storage_or_maintenance_evidence,15,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,online_reject_nonpositive_whatif:near_margin,15,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,online_reject_nonpositive_whatif:not_computable_no_shared_join_key,15,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,online_reject_nonpositive_whatif:sign_unstable,15,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,online_reject_nonpositive_whatif:single_query_dominated,12,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:conflicting_real_or_shadow_evidence,25,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:missing_storage_or_maintenance_evidence,93,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:near_margin,80,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:not_computable_no_ground_truth_label,6,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:not_computable_no_shared_join_key,93,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:positive_whatif_with_real_support_observed,44,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:sign_unstable,80,OK,grouped by primary_status first
+diagnostic_flag_by_primary_status,shadow_defer_positive_whatif:single_query_dominated,74,OK,grouped by primary_status first
+positive_arm_recall,known_positive_arm_cases,12,OK,PR20e rows with existing outcome=improved
+positive_arm_recall,remain_visible_not_hard_rejected,12,OK,primary_status=shadow_defer_positive_whatif
+positive_arm_recall,hard_rejected,0,OK,primary_status=online_reject_nonpositive_whatif
+positive_arm_recall,operator_ineligible,0,OK,operator check failed
+rejection_arm_safety,pr20f_gate_metrics_self_check,SELF_CHECK_PASSED,SELF_CHECK_PASSED,Recomputed Gate A metrics match historical PR20f gate metrics.
+rejection_arm_safety,threshold_0.01_false_accept_count,5,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.01_false_reject_count,1,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.01_false_accept_rate,0.416666666667,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.01_false_reject_rate,0.2,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.02_false_accept_count,5,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.02_false_reject_count,1,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.02_false_accept_rate,0.416666666667,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.02_false_reject_rate,0.2,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.03_false_accept_count,2,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.03_false_reject_count,4,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.03_false_accept_rate,0.333333333333,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.03_false_reject_rate,0.363636363636,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.05_false_accept_count,0,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.05_false_reject_count,6,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.05_false_accept_rate,0,OK,Gate A reproduction from PR20f rows
+rejection_arm_safety,threshold_0.05_false_reject_rate,0.4,OK,Gate A reproduction from PR20f rows
+nonpositive_whatif,total_online_reject_nonpositive_whatif,15,OK,whatif proxy <= 0 and operator eligible
+nonpositive_whatif,pr20c_candidates,3,OK,source-specific online reject count
+nonpositive_whatif,pr20f_rounds,12,OK,source-specific online reject count
+near_margin_sweep,policy,descriptive-only; no threshold is recommended,OK,reported for each configured window
+near_margin_sweep,window_0.01,129,OK,abs(proxy) <= window
+near_margin_sweep,window_0.02,157,OK,abs(proxy) <= window
+near_margin_sweep,window_0.03,210,OK,abs(proxy) <= window
+near_margin_sweep,window_0.05,258,OK,abs(proxy) <= window
+sign_instability,flagged_rows,258,OK,descriptive-only sweep-derived flag
+query_concentration,rows_with_existing_concentration_field,87,OK,uses query_level_concentration and top_query_delta_share only
+query_concentration,single_query_dominated_flagged_rows,86,OK,descriptive diagnostic flag
+storage_write_transition,storage_delta_evidence,BLOCKER,BLOCKER,PR20f storage proxy columns are missing or empty.
+storage_write_transition,write_maintenance_evidence,BLOCKER,BLOCKER,write-maintenance delta is not present in PR20c/20d/20e/20f artifacts
+storage_write_transition,transition_cost_evidence,BLOCKER,BLOCKER,build/drop/visibility transition cost is not present in PR20c/20d/20e/20f artifacts
+online_activation,PR21b-online,blocked,BLOCKED,PR21b-online remains blocked.
