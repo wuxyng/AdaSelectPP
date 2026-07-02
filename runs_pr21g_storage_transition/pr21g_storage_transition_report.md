@@ -13,12 +13,12 @@ Size API used: `pg_relation_size` for index relation main-size measurement.
 {
   "concurrent_load_observed": "unknown",
   "cpu_os": "Windows 10 AMD64",
-  "current_git_commit": "a4e10f628496e650117b58a945966452d1f2d172",
+  "current_git_commit": "3add1a6ec6db7d8798491e72e7c65b5a2db246ac",
   "database_name": "unknown",
   "dataset_scale_note": "unknown",
   "environment_fingerprint": "559ba198b9995f1864dc45c1ab64c22d4179748231b49e15182b337cbc71e230",
   "float_formatting_policy": ".12g",
-  "generation_timestamp": "2026-07-02T13:02:52+08:00",
+  "generation_timestamp": "2026-07-02T17:18:43+08:00",
   "input_artifact": {
     "columns": [
       "source_artifact",
@@ -60,8 +60,8 @@ Size API used: `pg_relation_size` for index relation main-size measurement.
   },
   "postgresql_version": "unknown",
   "schema_table_row_count": "unknown",
-  "script_git_commit_or_version": "SCRIPT_CONTENT_SHA256:14703420da3be406efe732b711470fc074efd0ccb94064d2c8efea1effbdfe4e",
-  "script_hash": "14703420da3be406efe732b711470fc074efd0ccb94064d2c8efea1effbdfe4e",
+  "script_git_commit_or_version": "SCRIPT_CONTENT_SHA256:9e086069e6c3c34fff83d8af52273e5999754edfec291bb8332f4aa0c16a4203",
+  "script_hash": "9e086069e6c3c34fff83d8af52273e5999754edfec291bb8332f4aa0c16a4203",
   "script_path": "tools\\pr21g_measure_prefix_upgrade_storage_transition.py",
   "shared_buffers": "unknown",
   "size_api_used": "pg_relation_size",
@@ -84,7 +84,7 @@ Size API used: `pg_relation_size` for index relation main-size measurement.
 
 - prefix: `movie_info(mi_movie_id)`
 - composite: `movie_info(mi_movie_id,mi_info_type_id)`
-- canonical source: `pr21e_by_round_prefix_upgrade_rows`
+- canonical source: `hardcoded_default_pair_fields_missing`
 - online_contention_still_blocked: `true`
 
 ## Summary

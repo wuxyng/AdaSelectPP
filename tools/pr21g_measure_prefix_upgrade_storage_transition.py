@@ -52,6 +52,9 @@ STATUS_DDL_NOT_ALLOWED = "NOT_COMPUTABLE_DDL_NOT_ALLOWED"
 STATUS_MISSING_TABLE = "NOT_COMPUTABLE_MISSING_TABLE"
 STATUS_EMPTY_TABLE = "NOT_COMPUTABLE_EMPTY_TABLE"
 STATUS_MISSING_INDEX = "NOT_COMPUTABLE_MISSING_INDEX"
+STATUS_PAIR_FIELDS_MISSING = "HARD_CODED_DEFAULT_PAIR_FIELDS_MISSING"
+STATUS_MISSING_INPUT = "NOT_COMPUTABLE_MISSING_INPUT"
+STATUS_NO_TIMING_SAMPLE = "NOT_COMPUTABLE_NO_TIMING_SAMPLE"
 STATUS_MEASURED = "MEASURED"
 
 TIMING_FIELDS = ("median", "stdev", "cv", "min", "max")
@@ -259,19 +262,50 @@ def fmt_int(value: Optional[int]) -> str:
     return "" if value is None else str(value)
 
 
+def parse_index_identity(text: str) -> Pair:
+    stripped = str(text).strip()
+    match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\(([^()]*)\)", stripped)
+    if not match:
+        raise ValueError(f"cannot parse index identity: {text}")
+    table = match.group(1)
+    columns = tuple(col.strip() for col in match.group(2).split(",") if col.strip())
+    if not columns:
+        raise ValueError(f"index identity has no columns: {text}")
+    return Pair(table, columns, columns)
+
+
+def pair_from_index_identities(prefix_index: str, composite_index: str) -> Pair:
+    prefix = parse_index_identity(prefix_index)
+    composite = parse_index_identity(composite_index)
+    if prefix.table != composite.table:
+        raise ValueError(f"prefix/composite table mismatch: {prefix_index} != {composite_index}")
+    return Pair(prefix.table, prefix.prefix_columns, composite.prefix_columns)
+
+
 def canonical_pair_from_pr21e(path: Path) -> Tuple[Pair, str, str]:
-    pair = Pair(DEFAULT_TABLE, DEFAULT_PREFIX_COLUMNS, DEFAULT_COMPOSITE_COLUMNS)
+    expected = Pair(DEFAULT_TABLE, DEFAULT_PREFIX_COLUMNS, DEFAULT_COMPOSITE_COLUMNS)
     if not path.exists():
-        return pair, "hardcoded_default", STATUS_NO_DB
-    _columns, rows = read_csv(path)
+        return expected, "hardcoded_default_missing_pr21e", STATUS_MISSING_INPUT
+    columns, rows = read_csv(path)
     eligible_rows = [
         row for row in rows
         if row.get("operator_check_status") == "operator_eligible"
         and row.get("operator_check_notes") == "exact_prefix_to_composite_upgrade"
     ]
-    if eligible_rows:
-        return pair, "pr21e_by_round_prefix_upgrade_rows", STATUS_READY_FOR_MEASUREMENT
-    return pair, "hardcoded_default_asserted", STATUS_READY_FOR_MEASUREMENT
+    if "prefix_index" not in columns or "composite_index" not in columns:
+        return expected, "hardcoded_default_pair_fields_missing", STATUS_PAIR_FIELDS_MISSING
+
+    pairs = {
+        pair_from_index_identities(row.get("prefix_index", ""), row.get("composite_index", ""))
+        for row in eligible_rows
+        if row.get("prefix_index", "").strip() and row.get("composite_index", "").strip()
+    }
+    if len(pairs) != 1:
+        raise ValueError(f"ambiguous canonical pair set from PR21e: {sorted(pair.key for pair in pairs)}")
+    pair = next(iter(pairs))
+    if pair != expected:
+        raise ValueError(f"canonical pair mismatch: {pair.key} != {expected.key}")
+    return pair, "pr21e_by_round_prefix_composite_fields", STATUS_READY_FOR_MEASUREMENT
 
 
 def assert_dominant_pair(pair: Pair) -> None:
@@ -299,6 +333,11 @@ def quote_ident(identifier: str) -> str:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
         raise ValueError(f"invalid SQL identifier: {identifier}")
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def qualified_index_name(schema: str, index_name: str) -> str:
+    validate_pr21g_index_name(index_name)
+    return f"{quote_ident(schema)}.{quote_ident(index_name)}"
 
 
 def index_column_sql(columns: Sequence[str]) -> str:
@@ -379,11 +418,12 @@ def find_index(cursor, schema: str, table: str, columns: Sequence[str]) -> Tuple
     return str(row[0]), int(row[1])
 
 
-def relation_size(cursor, index_name: str) -> Optional[int]:
+def relation_size(cursor, schema: str, index_name: str) -> Optional[int]:
+    qualified = qualified_index_name(schema, index_name)
     row = fetch_one(
         cursor,
         "SELECT CASE WHEN to_regclass(%s) IS NULL THEN NULL ELSE pg_relation_size(to_regclass(%s)) END",
-        (index_name, index_name),
+        (qualified, qualified),
     )
     if not row or row[0] is None:
         return None
@@ -401,17 +441,16 @@ def create_index(cursor, schema: str, table: str, index_name: str, columns: Sequ
     return (time.perf_counter() - start) * 1000.0
 
 
-def drop_pr21g_index(cursor, index_name: str) -> float:
-    validate_pr21g_index_name(index_name)
+def drop_pr21g_index(cursor, schema: str, index_name: str) -> float:
+    qualified = qualified_index_name(schema, index_name)
     start = time.perf_counter()
-    cursor.execute(f"DROP INDEX IF EXISTS {quote_ident(index_name)}")
+    cursor.execute(f"DROP INDEX IF EXISTS {qualified}")
     return (time.perf_counter() - start) * 1000.0
 
 
-def cleanup_created_indexes(cursor, created: Iterable[str]) -> None:
+def cleanup_created_indexes(cursor, schema: str, created: Iterable[str]) -> None:
     for index_name in reversed(list(created)):
-        validate_pr21g_index_name(index_name)
-        cursor.execute(f"DROP INDEX IF EXISTS {quote_ident(index_name)}")
+        cursor.execute(f"DROP INDEX IF EXISTS {qualified_index_name(schema, index_name)}")
 
 
 def measure_with_db(args: argparse.Namespace, pair: Pair) -> DbState:
@@ -482,8 +521,8 @@ def measure_with_db(args: argparse.Namespace, pair: Pair) -> DbState:
                     create_prefix_ms.append(create_index(cursor, args.schema, pair.table, name, pair.prefix_columns))
                     created.append(name)
                     if prefix_size is None:
-                        prefix_size = relation_size(cursor, name)
-                    drop_prefix_ms.append(drop_pr21g_index(cursor, name))
+                        prefix_size = relation_size(cursor, args.schema, name)
+                    drop_prefix_ms.append(drop_pr21g_index(cursor, args.schema, name))
                     created.remove(name)
 
             for rep in range(args.repetitions):
@@ -491,8 +530,8 @@ def measure_with_db(args: argparse.Namespace, pair: Pair) -> DbState:
                 create_composite_ms.append(create_index(cursor, args.schema, pair.table, name, pair.composite_columns))
                 created.append(name)
                 if composite_size is None:
-                    composite_size = relation_size(cursor, name)
-                drop_composite_ms.append(drop_pr21g_index(cursor, name))
+                    composite_size = relation_size(cursor, args.schema, name)
+                drop_composite_ms.append(drop_pr21g_index(cursor, args.schema, name))
                 created.remove(name)
 
             return DbState(
@@ -514,7 +553,7 @@ def measure_with_db(args: argparse.Namespace, pair: Pair) -> DbState:
         finally:
             try:
                 if created:
-                    cleanup_created_indexes(conn.cursor(), created)
+                    cleanup_created_indexes(conn.cursor(), args.schema, created)
             finally:
                 conn.close()
     except Exception as exc:
@@ -537,7 +576,8 @@ def numeric_status(value: Optional[float | int], state_status: str) -> Tuple[str
 
 def timing_status(samples: Sequence[float], state_status: str) -> Tuple[str, str, str]:
     if not samples:
-        return EVIDENCE_NOT_COMPUTABLE, SCOPE_NOT_COMPUTABLE, state_status
+        status = STATUS_NO_TIMING_SAMPLE if state_status == STATUS_MEASURED else state_status
+        return EVIDENCE_NOT_COMPUTABLE, SCOPE_NOT_COMPUTABLE, status
     return EVIDENCE_MEASURED, SCOPE_ISOLATED_SINGLE_CONN, STATUS_MEASURED
 
 
