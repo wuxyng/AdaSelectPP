@@ -36,6 +36,33 @@ def test_zero_whatif_gain_is_online_reject_nonpositive():
     assert status == pr21e.STATUS_ONLINE_REJECT
 
 
+def test_pr20c_oracle_metadata_is_not_real_evidence_label():
+    row = pr21e.make_round_output_row(
+        source_artifact="pr20c_candidates",
+        row_index=0,
+        row={"round_id": "1", "oracle_pass_swap": "1"},
+        operator_status="operator_eligible",
+        operator_notes="target_prefix_and_composite_match",
+        whatif_field="swap_relative_improvement",
+        whatif_value=0.02,
+        real_label_field="",
+        real_label="",
+        oracle_metadata_field="oracle_pass_swap",
+        oracle_metadata_value="1",
+        storage_missing=True,
+        near_windows=[],
+        no_shared_join_key=True,
+        missing_column=False,
+        single_query_dominance_threshold=0.5,
+    )
+
+    assert row["real_evidence_label_field"] == ""
+    assert row["real_evidence_label"] == ""
+    assert row["oracle_metadata_field"] == "oracle_pass_swap"
+    assert row["oracle_metadata_value"] == "1"
+    assert pr21e.DIAG_NO_GROUND_TRUTH in row["diagnostic_flags"].split("|")
+
+
 def test_semicolon_config_operator_shape_is_supported():
     baseline = "cast_info(ci_movie_id);movie_info(mi_movie_id)"
     swap = "cast_info(ci_movie_id);movie_info(mi_movie_id,mi_info_type_id)"
@@ -66,18 +93,53 @@ def test_nonpositive_whatif_with_positive_real_evidence_remains_reject_with_conf
     assert pr21e.DIAG_MISSING_STORAGE in flags
 
 
-def test_pr20f_gate_metrics_self_check_mismatch_reports_failure():
-    round_rows = [
-        {"gate_threshold": "0.03", "gate_outcome": "true_accept", "unstable_excluded": "0"},
-        {"gate_threshold": "0.03", "gate_outcome": "false_accept", "unstable_excluded": "0"},
-    ]
+def test_gate_metrics_self_check_ignores_bad_gate_outcome_when_base_fields_match():
+    round_rows = [{
+        "gate_threshold": "0.03",
+        "gate_accept": "1",
+        "gate_reject": "0",
+        "real_outcome": "improved",
+        "gate_outcome": "false_accept",
+        "unstable_excluded": "0",
+    }]
     recomputed = pr21e.recompute_gate_metrics(round_rows)
     historical = [{
         "threshold": "0.03",
-        "tested_count": "2",
-        "accept_count": "2",
+        "tested_count": "1",
+        "accept_count": "1",
         "reject_count": "0",
-        "true_accept_count": "2",
+        "true_accept_count": "1",
+        "false_accept_count": "0",
+        "true_reject_count": "0",
+        "false_reject_count": "0",
+        "accept_precision": "1",
+        "reject_success_rate": "",
+        "false_accept_rate": "0",
+        "false_reject_rate": "",
+    }]
+
+    status, diffs = pr21e.compare_gate_metric_rows(recomputed, historical)
+
+    assert status == pr21e.SELF_CHECK_PASSED
+    assert diffs == []
+
+
+def test_pr20f_gate_metrics_self_check_mismatch_reports_failure_when_base_fields_change():
+    round_rows = [{
+        "gate_threshold": "0.03",
+        "gate_accept": "1",
+        "gate_reject": "0",
+        "real_outcome": "flat",
+        "gate_outcome": "true_accept",
+        "unstable_excluded": "0",
+    }]
+    recomputed = pr21e.recompute_gate_metrics(round_rows)
+    historical = [{
+        "threshold": "0.03",
+        "tested_count": "1",
+        "accept_count": "1",
+        "reject_count": "0",
+        "true_accept_count": "1",
         "false_accept_count": "0",
         "true_reject_count": "0",
         "false_reject_count": "0",
