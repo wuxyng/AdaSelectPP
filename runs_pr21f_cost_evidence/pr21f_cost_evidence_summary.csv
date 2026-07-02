@@ -1,0 +1,25 @@
+section,metric,value,status,notes
+schema_stat_audit,pr21e_by_round,276,MEASURED,path=runs_pr21e_offline_validation\pr21e_validation_by_round.csv
+schema_stat_audit,pr21e_summary,82,MEASURED,path=runs_pr21e_offline_validation\pr21e_validation_summary.csv
+schema_stat_audit,pr21e_report,365,MEASURED,path=runs_pr21e_offline_validation\pr21e_validation_report.md
+schema_stat_audit,pr20c_candidates,189,MEASURED,path=runs_pr20c_swap_width2_oracle\pr20c_width2_oracle_candidates.csv
+schema_stat_audit,pr20d_rounds,6,MEASURED,path=runs_pr20d_real_exec_prefix_swap\pr20d_real_exec_rounds.csv
+schema_stat_audit,pr20e_rounds,13,MEASURED,path=runs_pr20e_broader_prefix_swap_replay\pr20e_broader_replay_rounds.csv
+schema_stat_audit,pr20f_rounds,68,NOT_COMPUTABLE,path=runs_pr20f_negative_control_prefix_swap_replay\pr20f_negative_control_rounds.csv; missing_stat_inputs=prefix_index_size_bytes|composite_index_size_bytes|storage_delta_bytes
+schema_stat_audit,cost_stats,0,NOT_COMPUTABLE,path=runs_pr21f_cost_evidence\optional_cost_stats.csv; missing_columns=pair_key|storage_delta_bytes_estimate|storage_model_name|storage_model_version|storage_model_assumptions|storage_model_parameters; missing_stat_inputs=pair_key|storage_delta_bytes_estimate|storage_model_name|storage_model_version|storage_model_assumptions|storage_model_parameters
+schema_stat_audit,write_trace,0,NOT_COMPUTABLE,path=runs_pr21f_cost_evidence\optional_write_trace.csv; missing_columns=pair_key|write_trace_events|trace_scope; missing_stat_inputs=write_trace_events
+schema_stat_audit,transition_trace,0,NOT_COMPUTABLE,path=runs_pr21f_cost_evidence\optional_transition_trace.csv; missing_columns=pair_key|transition_trace_ms|trace_scope; missing_stat_inputs=transition_trace_ms
+pair_set,missing_pair_rows,33,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr21e,11,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr20e,1,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr20f,1,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr20e_not_pr21e,0,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr20f_not_pr21e,0,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr21e_not_pr20e,10,MEASURED,reported separately from canonical pair rows
+pair_set,pairs_in_pr21e_not_pr20f,10,MEASURED,reported separately from canonical pair rows
+storage_delta_bytes,NOT_COMPUTABLE,44,NOT_COMPUTABLE,cost-evidence status count
+write_maintenance_events,NOT_COMPUTABLE,44,NOT_COMPUTABLE,cost-evidence status count
+transition_cost_ms,NOT_COMPUTABLE,44,NOT_COMPUTABLE,cost-evidence status count
+pr21e_blocker_preservation,pairs_with_preserved_pr21e_blocker,44,MEASURED,PR21e status values are copied into PR21f output rows
+forbidden_calculations,forbidden_fields_absent,true,MEASURED,"no net benefit, payback, ROI, ratio, score, or worth label fields"
+online_activation,PR21b-online,blocked,NOT_COMPUTABLE,PR21b-online remains blocked.
