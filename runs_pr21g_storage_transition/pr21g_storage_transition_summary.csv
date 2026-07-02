@@ -1,0 +1,17 @@
+section,metric,value,evidence_source,measurement_scope,status,notes
+input,pr21e_by_round_rows,276,MEASURED,NOT_COMPUTABLE,MEASURED,runs_pr21e_offline_validation\pr21e_validation_by_round.csv
+precondition,movie_info_table,false,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,no --db-url was provided
+precondition,movie_info_row_count,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,nonzero table required before measuring storage
+storage,prefix_size_bytes,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,pg_relation_size
+storage,composite_size_bytes,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,pg_relation_size
+storage,storage_delta_bytes,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,composite minus prefix
+storage,transient_peak_storage_bytes,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,prefix plus composite
+storage,storage_delta_ratio_vs_prefix,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,storage_delta_bytes / prefix_size_bytes
+transition,create_composite_ms_median,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,repetitions=3
+transition,drop_composite_ms_median,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,repetitions=3
+transition,create_prefix_ms_median,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,repetitions=3
+transition,drop_prefix_ms_median,,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE_NO_DB,repetitions=3
+scope,write_maintenance_measured,false,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE,PR21g-1 does not measure write-maintenance.
+scope,online_contention_still_blocked,true,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE,PR21g-1 does not measure online contention.
+schema,forbidden_fields_absent,true,MEASURED,NOT_COMPUTABLE,MEASURED,forbidden decision fields are absent
+online_activation,PR21b-online,blocked,NOT_COMPUTABLE,NOT_COMPUTABLE,NOT_COMPUTABLE,PR21b-online remains blocked.
