@@ -73,6 +73,8 @@ ROUND_OUTPUT_COLUMNS = [
     "near_margin_windows",
     "real_evidence_label_field",
     "real_evidence_label",
+    "oracle_metadata_field",
+    "oracle_metadata_value",
     "gate_outcome",
     "query_level_concentration",
     "top_query_delta_share",
@@ -729,6 +731,8 @@ def make_round_output_row(
     whatif_value: Optional[float],
     real_label_field: str,
     real_label: str,
+    oracle_metadata_field: str,
+    oracle_metadata_value: str,
     storage_missing: bool,
     near_windows: Sequence[float],
     no_shared_join_key: bool,
@@ -768,6 +772,8 @@ def make_round_output_row(
         "near_margin_windows": "|".join(fmt_float(window) for window in near_windows),
         "real_evidence_label_field": real_label_field,
         "real_evidence_label": real_label,
+        "oracle_metadata_field": oracle_metadata_field,
+        "oracle_metadata_value": oracle_metadata_value,
         "gate_outcome": str(row.get("gate_outcome", "")).strip(),
         "query_level_concentration": fmt_float(query_level_concentration),
         "top_query_delta_share": fmt_float(top_query_delta_share),
@@ -787,7 +793,7 @@ def build_by_round_rows(
     no_shared_join_key = True
 
     source_specs = [
-        ("pr20c_candidates", "swap_relative_improvement", ("oracle_pass_swap",), verify_pr20c_operator),
+        ("pr20c_candidates", "swap_relative_improvement", (), verify_pr20c_operator),
         ("pr20d_rounds", "pr20c_swap_relative_improvement", (), None),
         ("pr20e_rounds", "pr20c_whatif_rel_improvement", ("outcome",), None),
         ("pr20f_rounds", "target_swap_whatif_rel_improvement", ("real_outcome",), None),
@@ -821,6 +827,8 @@ def build_by_round_rows(
                     operator_status, operator_notes = verify_prefix_upgrade_operator(row.get("baseline_config", ""), row.get("swap_config", ""))
                 whatif = parse_float(row.get(whatif_field, ""))
             real_label_field, real_label = real_label_from_row(row, label_fields)
+            oracle_metadata_field = "oracle_pass_swap" if artifact_name == "pr20c_candidates" else ""
+            oracle_metadata_value = str(row.get("oracle_pass_swap", "")).strip() if oracle_metadata_field else ""
             windows = near_margin_windows(whatif, near_margin_sweep)
             rows.append(make_round_output_row(
                 source_artifact=artifact_name,
@@ -832,6 +840,8 @@ def build_by_round_rows(
                 whatif_value=whatif,
                 real_label_field=real_label_field,
                 real_label=real_label,
+                oracle_metadata_field=oracle_metadata_field,
+                oracle_metadata_value=oracle_metadata_value,
                 storage_missing=storage_missing,
                 near_windows=windows,
                 no_shared_join_key=no_shared_join_key,
@@ -852,6 +862,24 @@ def round_output_sort_key(row: Mapping[str, str]) -> Tuple[int, str, int, float,
     )
 
 
+def derive_gate_confusion_label(row: Mapping[str, str]) -> str:
+    accepted = boolish(row.get("gate_accept", ""))
+    rejected = boolish(row.get("gate_reject", ""))
+    outcome = str(row.get("real_outcome", "")).strip().lower()
+
+    if accepted == rejected:
+        return "INVALID_GATE_DECISION"
+    if accepted and outcome == "improved":
+        return "true_accept"
+    if accepted and outcome in {"flat", "worse"}:
+        return "false_accept"
+    if rejected and outcome in {"flat", "worse"}:
+        return "true_reject"
+    if rejected and outcome == "improved":
+        return "false_reject"
+    return "UNKNOWN_REAL_OUTCOME"
+
+
 def recompute_gate_metrics(round_rows: Sequence[Mapping[str, str]]) -> List[Dict[str, object]]:
     rows_by_threshold: Dict[float, List[Mapping[str, str]]] = defaultdict(list)
     for row in round_rows:
@@ -865,14 +893,15 @@ def recompute_gate_metrics(round_rows: Sequence[Mapping[str, str]]) -> List[Dict
     metric_rows: List[Dict[str, object]] = []
     for threshold in sorted(rows_by_threshold):
         rows = rows_by_threshold[threshold]
-        counts = Counter(str(row.get("gate_outcome", "")).strip() for row in rows)
+        derived_labels = [derive_gate_confusion_label(row) for row in rows]
+        counts = Counter(derived_labels)
         true_accept = counts["true_accept"]
         false_accept = counts["false_accept"]
         true_reject = counts["true_reject"]
         false_reject = counts["false_reject"]
-        accept = true_accept + false_accept
-        reject = true_reject + false_reject
-        tested = accept + reject
+        accept = sum(1 for row in rows if boolish(row.get("gate_accept", "")))
+        reject = sum(1 for row in rows if boolish(row.get("gate_reject", "")))
+        tested = len(rows)
         metric_rows.append({
             "threshold": threshold,
             "tested_count": tested,
@@ -952,7 +981,13 @@ def pr20f_gate_self_check(audits: Mapping[str, ArtifactAudit]) -> Tuple[str, Lis
     metrics = audits["pr20f_gate_metrics"]
     if not rounds.exists or not metrics.exists:
         return NOT_COMPUTABLE_MISSING_ARTIFACT, [], [], "PR20f gate self-check requires round and gate-metrics artifacts."
-    ok_rounds, missing_rounds = require_columns(rounds, ["gate_threshold", "gate_outcome", "unstable_excluded"])
+    ok_rounds, missing_rounds = require_columns(rounds, [
+        "gate_threshold",
+        "gate_accept",
+        "gate_reject",
+        "real_outcome",
+        "unstable_excluded",
+    ])
     ok_metrics, missing_metrics = require_columns(metrics, PR20F_GATE_METRICS_COLUMNS)
     if not ok_rounds or not ok_metrics:
         missing = sorted(set(missing_rounds + missing_metrics))
@@ -1211,6 +1246,11 @@ def render_report(
     lines.append("  target-specific proxy for the dominant movie_info swap.")
     lines.append("  This proxy limitation remains a blocker/caveat for PR21b-online.")
     lines.append("")
+    lines.append("Evidence discipline:")
+    lines.append("  PR20c oracle_pass_swap is what-if oracle metadata, not real/shadow")
+    lines.append("  ground-truth evidence. PR20c rows therefore remain")
+    lines.append("  NOT_COMPUTABLE_NO_GROUND_TRUTH_LABEL for real-evidence classification.")
+    lines.append("")
     lines.append("## Manifest")
     lines.append("")
     lines.append("```json")
@@ -1284,6 +1324,9 @@ def render_report(
         )
     lines.append("")
     lines.append("This is a reproduction/self-check of PR20f Gate A, not new online evidence.")
+    lines.append("PR20f Gate A self-check derives confusion labels from gate_accept/gate_reject")
+    lines.append("and real_outcome. The precomputed gate_outcome column is treated as audit")
+    lines.append("metadata only and is not used to pass the self-check.")
     lines.append("")
     lines.append("## Non-Positive What-If Online-Reject Cases")
     lines.append("")
