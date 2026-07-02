@@ -10,13 +10,18 @@ R13 proxy limitation:
   target-specific proxy for the dominant movie_info swap.
   This proxy limitation remains a blocker/caveat for PR21b-online.
 
+Evidence discipline:
+  PR20c oracle_pass_swap is what-if oracle metadata, not real/shadow
+  ground-truth evidence. PR20c rows therefore remain
+  NOT_COMPUTABLE_NO_GROUND_TRUTH_LABEL for real-evidence classification.
+
 ## Manifest
 
 ```json
 {
-  "current_git_commit": "909d08ce6e7efbe42181cd102eaf0f6e1529fa65",
+  "current_git_commit": "acccab855b66c644f9961ef5fc2493b60034bcf8",
   "float_formatting_policy": ".12g",
-  "generation_timestamp": "2026-07-01T16:26:03Z",
+  "generation_timestamp": "2026-07-02T04:42:20Z",
   "input_files": [
     {
       "content_hash": "0ed74f7f5dc5e4027d60177c01a89b71569f2bb6e7442a681fe75d725e617691",
@@ -129,8 +134,8 @@ R13 proxy limitation:
     "report_md": "runs_pr21e_offline_validation\\pr21e_validation_report.md",
     "summary_csv": "runs_pr21e_offline_validation\\pr21e_validation_summary.csv"
   },
-  "script_content_hash": "dcf5b99d00852d3d9b88161e5bcc954a86dccb2b3da2ebedf492f723760bee42",
-  "script_git_commit_or_version": "909d08ce6e7efbe42181cd102eaf0f6e1529fa65",
+  "script_content_hash": "e6f4ca05ee232167714527a7fbf917d9cd6030898cb1d2731d760496285c06e1",
+  "script_git_commit_or_version": "acccab855b66c644f9961ef5fc2493b60034bcf8",
   "script_path": "tools\\pr21e_validate_prefix_upgrade.py",
   "stable_sorting_policy": "primary_status, source_artifact, numeric round_id, numeric gate_threshold, row_index"
 }
@@ -279,17 +284,19 @@ Reports group by primary_status first, then diagnostic flags. No online accept l
 | --- | --- | ---: |
 | `operator_ineligible` | `missing_storage_or_maintenance_evidence` | 168 |
 | `operator_ineligible` | `near_margin` | 163 |
+| `operator_ineligible` | `not_computable_no_ground_truth_label` | 168 |
 | `operator_ineligible` | `not_computable_no_shared_join_key` | 168 |
 | `operator_ineligible` | `sign_unstable` | 163 |
 | `online_reject_nonpositive_whatif` | `missing_storage_or_maintenance_evidence` | 15 |
 | `online_reject_nonpositive_whatif` | `near_margin` | 15 |
+| `online_reject_nonpositive_whatif` | `not_computable_no_ground_truth_label` | 3 |
 | `online_reject_nonpositive_whatif` | `not_computable_no_shared_join_key` | 15 |
 | `online_reject_nonpositive_whatif` | `sign_unstable` | 15 |
 | `online_reject_nonpositive_whatif` | `single_query_dominated` | 12 |
 | `shadow_defer_positive_whatif` | `conflicting_real_or_shadow_evidence` | 25 |
 | `shadow_defer_positive_whatif` | `missing_storage_or_maintenance_evidence` | 93 |
 | `shadow_defer_positive_whatif` | `near_margin` | 80 |
-| `shadow_defer_positive_whatif` | `not_computable_no_ground_truth_label` | 6 |
+| `shadow_defer_positive_whatif` | `not_computable_no_ground_truth_label` | 24 |
 | `shadow_defer_positive_whatif` | `not_computable_no_shared_join_key` | 93 |
 | `shadow_defer_positive_whatif` | `positive_whatif_with_real_support_observed` | 44 |
 | `shadow_defer_positive_whatif` | `sign_unstable` | 80 |
@@ -314,6 +321,9 @@ PR20f Gate A self-check: `SELF_CHECK_PASSED`
 | 0.05 | 0 | 6 | 0 | 0.4 |
 
 This is a reproduction/self-check of PR20f Gate A, not new online evidence.
+PR20f Gate A self-check derives confusion labels from gate_accept/gate_reject
+and real_outcome. The precomputed gate_outcome column is treated as audit
+metadata only and is not used to pass the self-check.
 
 ## Non-Positive What-If Online-Reject Cases
 
