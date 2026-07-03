@@ -1,8 +1,8 @@
 # PR21g-1 Offline Storage And Transition Measurement
 
-PR21g-1 measures isolated storage and transition evidence only.
-It does not measure write-maintenance.
-It does not measure online contention.
+storage size was measured in isolated DB;
+isolated create/drop transition timing was measured;
+write-maintenance and online contention remain unmeasured blockers;
 PR21b-online remains blocked.
 
 Size API used: `pg_relation_size` for index relation main-size measurement.
@@ -110,7 +110,7 @@ Size API used: `pg_relation_size` for index relation main-size measurement.
 
 ## Conclusion
 
-PR21g-1 measures isolated storage and transition evidence only.
-It does not measure write-maintenance.
-It does not measure online contention.
+storage size was measured in isolated DB;
+isolated create/drop transition timing was measured;
+write-maintenance and online contention remain unmeasured blockers;
 PR21b-online remains blocked.
