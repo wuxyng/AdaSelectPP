@@ -108,6 +108,28 @@ Size API used: `pg_relation_size` for index relation main-size measurement.
 | `schema` | `forbidden_fields_absent` | true | `MEASURED` | `NOT_COMPUTABLE` | `MEASURED` | forbidden decision fields are absent |
 | `online_activation` | `PR21b-online` | blocked | `NOT_COMPUTABLE` | `NOT_COMPUTABLE` | `NOT_COMPUTABLE` | PR21b-online remains blocked. |
 
+## PR21g-1b Sanity Replay
+
+PR21g-1b repeated the PR21g-1 storage and isolated transition measurement on
+the same remote isolated JOB/IMDB database.
+
+- Storage values matched the first measured run exactly:
+  - `movie_info_row_count`: 14,835,720
+  - `prefix_size_bytes`: 333,643,776
+  - `composite_size_bytes`: 333,398,016
+  - `storage_delta_bytes`: -245,760
+  - `storage_delta_ratio_vs_prefix`: -0.000736593989393
+- Transition timing remained the same order of magnitude:
+  - `create_composite_ms_median`: 5864.36 ms first run, 5798.29 ms replay,
+    delta -1.13%
+  - `create_prefix_ms_median`: 5749.11 ms first run, 4780.12 ms replay,
+    delta -16.85%
+- Post-check found no residual PR21g-created indexes:
+  - `PR21G_INDEX_COUNT=0`
+- Write-maintenance was not measured.
+- Online contention was not measured.
+- PR21b-online remains blocked.
+
 ## Conclusion
 
 PR21g-1 measures isolated storage and transition evidence only.
