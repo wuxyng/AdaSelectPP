@@ -226,7 +226,7 @@ def test_report_states_pr21b_online_remains_blocked(tmp_path: Path):
 
     report = pr21g.report_text(manifest, input_audit, row, summary)
 
-    assert "PR21g-1 measures isolated storage and transition evidence only." in report
-    assert "It does not measure write-maintenance." in report
-    assert "It does not measure online contention." in report
+    assert "storage size was measured in isolated DB;" in report
+    assert "isolated create/drop transition timing was measured;" in report
+    assert "write-maintenance and online contention remain unmeasured blockers;" in report
     assert "PR21b-online remains blocked." in report
