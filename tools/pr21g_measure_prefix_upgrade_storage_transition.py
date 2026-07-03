@@ -405,7 +405,7 @@ def find_index(cursor, schema: str, table: str, columns: Sequence[str]) -> Tuple
           AND t.relname = %s
           AND i.indisvalid
           AND (
-            SELECT array_agg(a.attname ORDER BY k.ordinality)
+            SELECT array_agg(a.attname::text ORDER BY k.ordinality)
             FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ordinality)
             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
           ) = %s::text[]
