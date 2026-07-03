@@ -95,6 +95,18 @@ def test_relation_size_lookup_is_schema_qualified():
     )
 
 
+def test_find_index_casts_attribute_names_to_text_for_catalog_comparison():
+    cursor = FakeCursor(fetchone_result=None)
+
+    name, size = pr21g.find_index(cursor, "public", "movie_info", ("mi_movie_id",))
+
+    assert name == ""
+    assert size is None
+    assert "array_agg(a.attname::text ORDER BY k.ordinality)" in cursor.statements[0]
+    assert "= %s::text[]" in cursor.statements[0]
+    assert cursor.params[0] == ("public", "movie_info", ["mi_movie_id"])
+
+
 def test_empty_table_status_maps_to_not_computable_empty_table():
     assert pr21g.empty_table_status(0) == pr21g.STATUS_EMPTY_TABLE
     assert pr21g.empty_table_status(12) == pr21g.STATUS_READY_FOR_MEASUREMENT
