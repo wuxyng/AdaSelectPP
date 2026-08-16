@@ -19,7 +19,17 @@ import statistics
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -191,6 +201,14 @@ class WorkloadRun:
     total_ms: float
     per_query_ms: List[float]
     plan_uses_index: List[bool]
+
+
+class PR20fIndexCollisionError(RuntimeError):
+    """Raised before a round mutates a pre-existing exact target name."""
+
+
+class PR20fStrictCleanupError(RuntimeError):
+    """Raised when final run-owned physical-index cleanup is not proven complete."""
 
 
 def _fmt(value: object) -> object:
@@ -427,6 +445,93 @@ def generate_pr20f_index_ddls(
     return ddls
 
 
+def _deduplicate_index_ddls(ddls: Iterable[IndexDDL]) -> Dict[str, IndexDDL]:
+    by_name: Dict[str, IndexDDL] = {}
+    for ddl in ddls:
+        existing = by_name.get(ddl.name)
+        if existing is not None and existing != ddl:
+            raise ValueError(f"conflicting PR20f DDL definitions for exact index name {ddl.name!r}")
+        by_name[ddl.name] = ddl
+    return by_name
+
+
+def _existing_catalog_names(db, names: Iterable[str]) -> Set[str]:
+    exact_names = sorted({str(name) for name in names if str(name)})
+    if not exact_names:
+        return set()
+    rows = db.exec_fetchall_params(
+        "SELECT c.relname::text FROM pg_catalog.pg_class AS c "
+        "WHERE c.relname = ANY(%s) "
+        "ORDER BY c.relname",
+        (exact_names,),
+    )
+    return {str(row[0]) for row in rows if row and str(row[0]) in exact_names}
+
+
+def register_run_owned_indexes(
+    db,
+    run_owned_indexes: MutableMapping[str, IndexDDL],
+    round_ddls: Iterable[IndexDDL],
+) -> None:
+    """Register a round only after proving its new exact target names are absent."""
+
+    unique = _deduplicate_index_ddls(round_ddls)
+    for name, ddl in unique.items():
+        registered = run_owned_indexes.get(name)
+        if registered is not None and registered != ddl:
+            raise ValueError(f"run-owned registry conflict for exact index name {name!r}")
+
+    new_names = sorted(name for name in unique if name not in run_owned_indexes)
+    try:
+        conflicts = sorted(_existing_catalog_names(db, new_names))
+    except Exception as exc:
+        raise PR20fIndexCollisionError(
+            "could not verify exact PR20f target-name absence before physical mutation"
+        ) from exc
+    if conflicts:
+        raise PR20fIndexCollisionError(
+            "pre-existing exact PR20f target index name(s): " + ", ".join(conflicts)
+        )
+
+    for name in new_names:
+        run_owned_indexes[name] = unique[name]
+
+
+def strict_cleanup_run_owned_indexes(
+    db,
+    run_owned_indexes: Mapping[str, IndexDDL],
+) -> None:
+    """Drop and verify only exact names registered as owned by this PR20f run."""
+
+    owned = _deduplicate_index_ddls(run_owned_indexes.values())
+    failures: List[str] = []
+    for ddl in reversed(list(owned.values())):
+        try:
+            db.execute_only(ddl.drop_sql)
+        except Exception as exc:
+            rollback_error = None
+            try:
+                db.rollback()
+            except Exception as rollback_exc:
+                rollback_error = rollback_exc
+            detail = f"{ddl.name}: {type(exc).__name__}: {exc}"
+            if rollback_error is not None:
+                detail += f"; rollback {type(rollback_error).__name__}: {rollback_error}"
+            failures.append(detail)
+
+    try:
+        remaining = sorted(_existing_catalog_names(db, owned))
+    except Exception as exc:
+        failures.append(f"verification: {type(exc).__name__}: {exc}")
+        remaining = []
+    if remaining:
+        failures.append("remaining exact index name(s): " + ", ".join(remaining))
+    if failures:
+        raise PR20fStrictCleanupError(
+            "PR20f strict physical-index cleanup failed: " + " | ".join(failures)
+        )
+
+
 def _pick_index_name(ddls: Sequence[IndexDDL], index: IndexKey) -> str:
     target = normalize_candidate_key(index)
     return next((ddl.name for ddl in ddls if normalize_candidate_key(ddl.index) == target), "")
@@ -516,6 +621,7 @@ def evaluate_round(
     gate_thresholds: Sequence[float],
     run_label: str,
     run_order_id: str,
+    run_owned_indexes: MutableMapping[str, IndexDDL],
 ) -> Tuple[List[Mapping[str, object]], List[Mapping[str, object]], Optional[Mapping[str, object]]]:
     if int(warmup) < 1:
         raise ValueError("PR20f requires warmup >= 1")
@@ -576,6 +682,7 @@ def evaluate_round(
         max_num=max_num,
     )
     all_ddls = list(baseline_ddls) + list(swap_ddls)
+    register_run_owned_indexes(db, run_owned_indexes, all_ddls)
     prefix_name = _pick_index_name(baseline_ddls, prefix_index)
     composite_name = _pick_index_name(swap_ddls, composite_index)
 
@@ -830,6 +937,7 @@ def run_experiment(
     outcome_threshold: float,
     run_label: str,
     run_order_id: str,
+    run_owned_indexes: MutableMapping[str, IndexDDL],
 ) -> Tuple[Path, Path, Path, Path, Path]:
     baselines = read_executed_configs(metrics_csv)
     selected = select_negative_control_rounds(
@@ -872,6 +980,7 @@ def run_experiment(
             gate_thresholds=gate_thresholds,
             run_label=run_label,
             run_order_id=run_order_id,
+            run_owned_indexes=run_owned_indexes,
         )
         round_rows.extend(rows)
         query_rows.extend(qrows)
@@ -936,35 +1045,80 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     workloads = load_workloads(args.benchmark, args.workload_type, int(args.round_size))
     db = DatabaseConnector(str(args.database), virtual=False, run_num=1)
+    run_owned_indexes: Dict[str, IndexDDL] = {}
+    paths: Optional[Tuple[Path, Path, Path, Path, Path]] = None
+    experiment_error: Optional[BaseException] = None
+    experiment_traceback = None
+    cleanup_error: Optional[BaseException] = None
+    cleanup_traceback = None
+    close_error: Optional[BaseException] = None
+    close_traceback = None
     try:
-        paths = run_experiment(
-            db=db,
-            workloads=workloads,
-            metrics_csv=Path(args.metrics_csv),
-            pr20c_rounds_csv=Path(args.pr20c_rounds_csv),
-            pr20c_candidates_csv=Path(args.pr20c_candidates_csv),
-            output_root=Path(args.output_root),
-            prefix_index=normalize_candidate_key(args.prefix_index),
-            composite_index=normalize_candidate_key(args.composite_index),
-            max_num=int(args.max_num),
-            selection_mode=str(args.selection_mode),
-            max_rounds_per_category=int(args.max_rounds_per_category),
-            positive_anchor_count=int(args.positive_anchor_count),
-            gate_thresholds=parse_gate_thresholds(str(args.gate_rel_thresholds)),
-            gate_margin_threshold=float(args.gate_margin_threshold),
-            near_margin_band=float(args.near_margin_band),
-            warmup=int(args.warmup),
-            repeats=int(args.repeats),
-            max_cv=float(args.max_cv),
-            outcome_threshold=float(args.outcome_threshold),
-            run_label=str(args.run_label),
-            run_order_id=str(args.run_order_id),
-        )
+        try:
+            paths = run_experiment(
+                db=db,
+                workloads=workloads,
+                metrics_csv=Path(args.metrics_csv),
+                pr20c_rounds_csv=Path(args.pr20c_rounds_csv),
+                pr20c_candidates_csv=Path(args.pr20c_candidates_csv),
+                output_root=Path(args.output_root),
+                prefix_index=normalize_candidate_key(args.prefix_index),
+                composite_index=normalize_candidate_key(args.composite_index),
+                max_num=int(args.max_num),
+                selection_mode=str(args.selection_mode),
+                max_rounds_per_category=int(args.max_rounds_per_category),
+                positive_anchor_count=int(args.positive_anchor_count),
+                gate_thresholds=parse_gate_thresholds(str(args.gate_rel_thresholds)),
+                gate_margin_threshold=float(args.gate_margin_threshold),
+                near_margin_band=float(args.near_margin_band),
+                warmup=int(args.warmup),
+                repeats=int(args.repeats),
+                max_cv=float(args.max_cv),
+                outcome_threshold=float(args.outcome_threshold),
+                run_label=str(args.run_label),
+                run_order_id=str(args.run_order_id),
+                run_owned_indexes=run_owned_indexes,
+            )
+        except BaseException as exc:
+            experiment_error = exc
+            experiment_traceback = exc.__traceback__
     finally:
         try:
+            strict_cleanup_run_owned_indexes(db, run_owned_indexes)
+        except BaseException as exc:
+            cleanup_error = exc
+            cleanup_traceback = exc.__traceback__
+        try:
             db.close()
-        except Exception:
-            pass
+        except BaseException as exc:
+            close_error = exc
+            close_traceback = exc.__traceback__
+
+    finalization_errors = []
+    if cleanup_error is not None:
+        finalization_errors.append(
+            f"cleanup={type(cleanup_error).__name__}: {cleanup_error}"
+        )
+    if close_error is not None:
+        finalization_errors.append(f"close={type(close_error).__name__}: {close_error}")
+    if experiment_error is not None:
+        if finalization_errors:
+            raise RuntimeError(
+                f"PR20f experiment failed with {type(experiment_error).__name__}: "
+                f"{experiment_error}; finalization also failed: "
+                + "; ".join(finalization_errors)
+            ) from experiment_error
+        raise experiment_error.with_traceback(experiment_traceback)
+    if cleanup_error is not None and close_error is not None:
+        raise RuntimeError(
+            "PR20f finalization failed: " + "; ".join(finalization_errors)
+        ) from cleanup_error
+    if cleanup_error is not None:
+        raise cleanup_error.with_traceback(cleanup_traceback)
+    if close_error is not None:
+        raise close_error.with_traceback(close_traceback)
+    if paths is None:
+        raise RuntimeError("PR20f experiment produced no output paths")
     for path in paths:
         print(path)
     return 0
