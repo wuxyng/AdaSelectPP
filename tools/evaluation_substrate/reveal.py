@@ -147,6 +147,7 @@ _FORBIDDEN_QUERY_TOKEN_RE = re.compile(
     r"vacuum|analyze|refresh|reindex|cluster|do|explain)\b",
     re.IGNORECASE,
 )
+_DOLLAR_QUOTE_START_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
 
 
 def _canonical_json(value: object) -> str:
@@ -173,18 +174,132 @@ def _index_text(index: IndexDefinition) -> str:
     return f"{index.table}({','.join(index.columns)})"
 
 
+def _mask_postgresql_non_code(sql: str) -> str:
+    """Return a same-length view containing only executable PostgreSQL code."""
+
+    text = str(sql)
+    masked = list(text)
+    length = len(text)
+
+    def blank(start: int, end: int) -> None:
+        for position in range(start, end):
+            if text[position] not in {"\r", "\n"}:
+                masked[position] = " "
+
+    def identifier_continuation(character: str) -> bool:
+        return character.isalnum() or character in {"_", "$"}
+
+    position = 0
+    while position < length:
+        if text.startswith("--", position):
+            end = text.find("\n", position + 2)
+            if end < 0:
+                end = length
+            blank(position, end)
+            position = end
+            continue
+
+        if text.startswith("/*", position):
+            depth = 1
+            end = position + 2
+            while end < length and depth:
+                if text.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif text.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            if depth:
+                raise RevealError("unterminated PostgreSQL block comment")
+            blank(position, end)
+            position = end
+            continue
+
+        if text.startswith("*/", position):
+            raise RevealError("unexpected PostgreSQL block comment terminator")
+
+        character = text[position]
+        if character == "'":
+            escape_string = (
+                position > 0
+                and text[position - 1] in {"e", "E"}
+                and (
+                    position == 1
+                    or not identifier_continuation(text[position - 2])
+                )
+            )
+            end = position + 1
+            terminated = False
+            while end < length:
+                if escape_string and text[end] == "\\":
+                    end += 2
+                    continue
+                if text[end] == "'":
+                    if end + 1 < length and text[end + 1] == "'":
+                        end += 2
+                        continue
+                    end += 1
+                    terminated = True
+                    break
+                end += 1
+            if not terminated:
+                raise RevealError("unterminated PostgreSQL string literal")
+            blank(position, min(end, length))
+            position = end
+            continue
+
+        if character == '"':
+            end = position + 1
+            terminated = False
+            while end < length:
+                if text[end] == '"':
+                    if end + 1 < length and text[end + 1] == '"':
+                        end += 2
+                        continue
+                    end += 1
+                    terminated = True
+                    break
+                end += 1
+            if not terminated:
+                raise RevealError("unterminated PostgreSQL quoted identifier")
+            blank(position, end)
+            position = end
+            continue
+
+        if character == "$" and (
+            position == 0 or not identifier_continuation(text[position - 1])
+        ):
+            opener = _DOLLAR_QUOTE_START_RE.match(text, position)
+            if opener is not None:
+                delimiter = opener.group(0)
+                close = text.find(delimiter, opener.end())
+                if close < 0:
+                    raise RevealError("unterminated PostgreSQL dollar-quoted string")
+                end = close + len(delimiter)
+                blank(position, end)
+                position = end
+                continue
+
+        position += 1
+
+    return "".join(masked)
+
+
 def _safe_explain_query(sql: str) -> str:
-    text = str(sql or "").strip()
-    if text.endswith(";"):
-        text = text[:-1].rstrip()
-    if not text or not _READ_QUERY_RE.match(text):
+    text = str(sql or "")
+    if "\x00" in text:
+        raise RevealError("NUL bytes are forbidden in workload SQL")
+    code = _mask_postgresql_non_code(text)
+    if not code.strip() or not _READ_QUERY_RE.match(code):
         raise RevealError("only frozen SELECT/WITH workload statements may be explained")
-    if ";" in text:
+    separators = [position for position, character in enumerate(code) if character == ";"]
+    if len(separators) > 1 or (
+        separators and code[separators[0] + 1 :].strip()
+    ):
         raise RevealError("multiple SQL statements are forbidden")
-    # In particular, reject data-modifying CTEs.  This lexical guard is
-    # deliberately conservative: a frozen workload query that cannot be
-    # established as read-only is rejected rather than guessed.
-    if _FORBIDDEN_QUERY_TOKEN_RE.search(text):
+    if _FORBIDDEN_QUERY_TOKEN_RE.search(code):
         raise RevealError("optimizer access is restricted to read-only SELECT/WITH queries")
     return text
 

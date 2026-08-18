@@ -1,5 +1,6 @@
 import ast
 import csv
+import hashlib
 import inspect
 import json
 import threading
@@ -50,6 +51,7 @@ from tools.evaluation_substrate.reveal import (
     RevealError,
     _HypoPGSession,
     _RevealService,
+    _safe_explain_query,
 )
 from tools.evaluation_substrate.run_context import (
     ArtifactDriftError,
@@ -764,6 +766,128 @@ def test_hypopg_backend_rejects_data_modifying_cte_before_database_access(tmp_pa
             encoding="utf-8"
         )
         assert connection.oids == set()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    (
+        "SELECT '[do]';",
+        "SELECT 'delete update drop do';",
+        "SELECT 'text;still one literal';",
+        'SELECT "drop" FROM t;',
+        "SELECT 'it''s delete; do';",
+        r"SELECT E'it\'s delete; do';",
+        r"SELECT U&'d\0061t; do';",
+        'SELECT "dr""op" FROM t;',
+        "SELECT $$delete; do$$;",
+        "SELECT $tag$delete; do 'quote' /* comment */$tag$;",
+        "SELECT 1 -- delete; do\n;",
+        "/* drop; */ SELECT 1 /* delete; /* nested do; */ still a comment */;",
+    ),
+)
+def test_sql_safety_validator_masks_non_executable_postgresql_text(sql):
+    assert _safe_explain_query(sql) == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    (
+        "WITH changed AS (DELETE FROM t RETURNING *) SELECT * FROM changed;",
+        "SELECT 1; DELETE FROM t;",
+        "DO $$ BEGIN NULL; END $$;",
+        "INSERT INTO t VALUES (1);",
+        "UPDATE t SET a = 1;",
+        "DELETE FROM t;",
+        "MERGE INTO t USING s ON false WHEN NOT MATCHED THEN INSERT VALUES (1);",
+        "COPY t FROM STDIN;",
+        "CALL p();",
+        "CREATE TABLE x(a integer);",
+        "ALTER TABLE t ADD COLUMN b integer;",
+        "DROP TABLE t;",
+        "TRUNCATE t;",
+        "GRANT SELECT ON t TO reader;",
+        "REVOKE SELECT ON t FROM reader;",
+        "VACUUM t;",
+        "ANALYZE t;",
+        "REFRESH MATERIALIZED VIEW v;",
+        "REINDEX TABLE t;",
+        "CLUSTER t;",
+        "EXPLAIN SELECT 1;",
+    ),
+)
+def test_sql_safety_validator_rejects_executable_writes_and_extra_statements(sql):
+    with pytest.raises(RevealError):
+        _safe_explain_query(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    (
+        "SELECT 'unterminated",
+        'SELECT "unterminated',
+        "SELECT $$unterminated",
+        "SELECT $tag$unterminated",
+        "SELECT 1 /* unterminated",
+        "SELECT 1 */",
+        r"SELECT E'unterminated\'",
+    ),
+)
+def test_sql_safety_validator_fails_closed_on_unterminated_lexical_constructs(sql):
+    with pytest.raises(RevealError, match="PostgreSQL"):
+        _safe_explain_query(sql)
+
+
+def test_sql_safety_validator_accepts_all_frozen_job_r2_r24_exact_sql():
+    from adaselect_pp.common.sql_utils import split_template_sql
+
+    workload = Path(__file__).resolve().parents[1] / "database" / "workload" / "job_random.txt"
+    raw_lines = workload.read_bytes().splitlines()
+    assert len(raw_lines) == 25 * 33
+    inventory = []
+    accepted_do_occurrences = []
+    for global_position in range(2 * 33, 25 * 33):
+        raw_line = raw_lines[global_position]
+        assert raw_line.count(b"\t") == 1
+        sql_bytes, template_bytes = raw_line.split(b"\t", 1)
+        template_id, sql = split_template_sql(raw_line.decode("utf-8"), "")
+        assert template_id == template_bytes.decode("utf-8")
+        assert sql.encode("utf-8") == sql_bytes
+        assert _safe_explain_query(sql) == sql
+        round_id, position = divmod(global_position, 33)
+        occurrence_id = f"job_random:r{round_id:02d}:p{position:02d}"
+        exact_sql_hash = hashlib.sha256(sql_bytes).hexdigest()
+        inventory.append(
+            {
+                "global_position": global_position,
+                "source_line_number": global_position + 1,
+                "round_id": round_id,
+                "position": position,
+                "occurrence_id": occurrence_id,
+                "template_id": template_id,
+                "sql_byte_length": len(sql_bytes),
+                "exact_sql_hash": exact_sql_hash,
+            }
+        )
+        if "'[do]'" in sql:
+            accepted_do_occurrences.append(occurrence_id)
+
+    assert len(inventory) == 759
+    assert accepted_do_occurrences == [
+        "job_random:r11:p24",
+        "job_random:r12:p06",
+        "job_random:r15:p02",
+        "job_random:r23:p11",
+    ]
+    payload = json.dumps(
+        inventory,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    assert hashlib.sha256(payload).hexdigest() == (
+        "c7f89fef027001cb12322546c2e2b672f5c1f6880f5e907c6f9f76140eaa43fa"
+    )
 
 
 def test_tier2_requires_finite_new_call_guard(tmp_path):

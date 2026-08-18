@@ -39,7 +39,9 @@ def _connect():
 def test_live_hypopg_same_session_and_epoch_drift(tmp_path):
     connection = _connect()
     table = "evaluation_substrate_live_" + uuid.uuid4().hex[:12]
-    query = QuerySpec("live-q", f"SELECT * FROM {table} WHERE a = 42")
+    query = QuerySpec(
+        "live-q", f"SELECT '[do]' AS literal_marker, * FROM {table} WHERE a = 42"
+    )
     configuration = ConfigurationSpec((IndexDefinition(table, ("a",)),))
     original_random_page_cost = None
     try:
@@ -94,6 +96,10 @@ def test_live_hypopg_same_session_and_epoch_drift(tmp_path):
             assert result.optimizer_cost >= 0
             assert result.used_indexes == (f"hypopg:{table}(a)",)
             assert len(result.plan_hash) == 64
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM hypopg_list_indexes")
+            assert int(cursor.fetchone()[0]) == 0
 
         with connection.cursor() as cursor:
             cursor.execute(
