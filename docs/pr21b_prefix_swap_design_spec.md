@@ -75,6 +75,73 @@ prefix-upgrade-like operations and transition-aware evidence, but it does not
 provide additional validation for the specific JOB `movie_info` swap. That
 specific evidence remains limited to PR20d, PR20e, and PR20f.
 
+### Accepted current-epoch competing-configuration measurement
+
+The accepted PR20c competing-configuration measurement has the following
+authoritative identity:
+
+```text
+Evaluation Substrate tag: evaluation-substrate-v0.1
+commit: f1cf18f8a942958d4f1400fd8722704f4a93b57a
+attempt: 20260819T045354Z_pr20c_competing_v01_retry_d6fba243d22f
+```
+
+The measurement ran on the PowerEdge environment recorded by its artifacts. It
+replayed the frozen PR20c prefix-swap action universe for 23 JOB-random windows,
+`r2` through `r24`, and measured optimizer estimated workload cost only.
+
+The accepted counts and diagnostics are:
+
+| measurement fact | accepted result | primary artifact evidence |
+|---|---:|---|
+| ordered workload occurrences | `759` | `measurement_audit.json`, `measurement_state.json` |
+| round/configuration instances | `179` | `measurement_audit.json`, `measurement_state.json` |
+| occurrence/configuration requests | `5,907` | `measurement_audit.json` |
+| physical optimizer calls | `5,944` | `measurement_audit.json`, `measurement_report.md` |
+| strict current-epoch pairwise ranking reversals | `25` | `measurement_audit.json`, `pairwise_reversals.csv` |
+| repeated actions with strict baseline-sign changes | `8` | `measurement_audit.json`, `action_effects.csv` |
+| rounds with a unique measured best legal configuration | `23/23` | `measurement_audit.json`, `configuration_rankings.csv` |
+| most frequent winning action | wins `14` of its `21` legal windows | `measurement_audit.json`, `configuration_rankings.csv`, `fixed_action_regret.csv` |
+| that action's relative regret on its legal support | mean `1.4366%`; maximum `12.4428%` | `fixed_action_regret.csv` |
+| product-local exact-key sum | `5,898` | `measurement_audit.json`, `measurement_state.json`, `rounds/*/optimizer_responses.csv` |
+| globally unique `(exact_sql_hash, configuration_id, epoch_hash)` keys | `5,811` | accepted cross-round reconciliation of `rounds/*/optimizer_responses.csv` |
+| contradictory global key payloads | `0` | accepted cross-round reconciliation of `rounds/*/optimizer_responses.csv` |
+
+The most frequent winning action in that table is
+`DROP:movie_info(mi_movie_id)|ADD:movie_info(mi_movie_id,mi_info_type_id)`.
+The difference between the product-local exact-key sum and the globally unique
+key count is cross-window reuse of exact SQL/configuration/epoch keys, not a
+payload contradiction. Template identifiers are not part of this exact response
+identity.
+
+These artifacts contain no runtime execution, DML, transition-cost, storage,
+selector, ranker, policy, or online evidence. The measurement created no Model 1
+evidence session and charged zero policy probes. Historical optimizer costs were
+used to validate the frozen input facts, not to form the current-epoch objective.
+
+### Earned conclusion and gate state
+
+The accepted gate state is:
+
+```text
+MODEL1_DECISION_AMBIGUITY_GATE_PASSED
+MODEL1_EVIDENCE_FEASIBILITY_UNTESTED
+PR21B_ONLINE_BLOCKED
+```
+
+The first state is earned because repeated legal actions change strict ordering
+and strict baseline-relative sign across current-epoch windows. In addition, the
+most frequent winner is legal in 21 windows but wins only 14, with nonzero mean
+and maximum relative regret to the per-window measured best. A static
+always-use-one-swap rule is therefore insufficient to choose the measured best
+configuration across this action universe.
+
+That conclusion is restricted to JOB random, the frozen PR20c prefix-swap action
+universe, optimizer estimated cost, and the measured epoch. It does not establish
+that Model 1 can acquire useful decision evidence within a probe budget, improve
+runtime, cover a different action universe, or operate safely online. No Model 1
+success claim is earned, and PR21b-online remains blocked.
+
 ## Gate A Versus Gate B
 
 PR20f tested Gate A, an offline scalar threshold gate:
@@ -179,6 +246,176 @@ Record and observe a plausible swap without materializing or selecting it.
 ```
 
 Near-margin cases should remain shadow/deferred unless stronger evidence exists.
+
+## Offline Model 1 Interaction Contract
+
+This contract defines a future offline evaluation problem. It does not define an
+acquisition algorithm and does not authorize online behavior.
+
+For window `t`, let:
+
+- `W_t = (q_t,1, ..., q_t,n_t)` be the ordered workload occurrences, with
+  duplicate exact SQL occurrences retained and counted separately;
+- `C_old,t` be the historical incumbent configuration at the start of the
+  window;
+- `A_t` be the externally supplied finite set of legal configurations, with
+  `C_old,t in A_t` required;
+- `B` be the charged policy-probe budget; and
+- `E_t` be a fresh evidence session containing no current-window optimizer
+  responses at decision start.
+
+The evaluator may obtain current-window optimizer evidence only by calling:
+
+```text
+reveal(q, C)
+```
+
+where `q` is identified by its exact SQL identity from `W_t` and `C` is in
+`A_t`. The first reveal of an exact
+`(exact_sql_hash(q), configuration_id(C), epoch_hash)` key in `E_t` charges one
+policy probe. Reusing an already revealed exact key in the same evidence session
+does not charge another probe. A template identifier is not an exact response
+key and cannot make a reveal free.
+
+After at most `B` charged probes, the evaluator must output exactly one
+configuration:
+
+```text
+C_hat,t in A_t
+```
+
+For optimizer cost `cost_t(q, C)`, hidden current-window ground truth is the
+occurrence-weighted sum:
+
+```text
+J_t(C) = sum over ordered occurrences q in W_t of cost_t(q, C)
+```
+
+Thus, two occurrences with the same exact SQL each contribute to `J_t(C)`, even
+if one exact response reveal supplies their common optimizer response within the
+same epoch.
+
+Let `C_star,t` be a fixed-tie-broken member of `argmin` over `A_t`. The primary
+per-window loss is absolute regret:
+
+```text
+R_t = J_t(C_hat,t) - min over C in A_t of J_t(C)
+```
+
+Normalized regret is a separate reported diagnostic, for example when the
+denominator is positive:
+
+```text
+NR_t = R_t / J_t(C_star,t)
+```
+
+Normalized regret must not replace absolute regret in evaluation, aggregation,
+or gate decisions. Any alternative normalization must be predeclared and
+reported alongside, not instead of, `R_t`.
+
+## Causal Evidence Boundary
+
+Every offline replay must keep four information classes distinct:
+
+1. **Pre-decision information for window `t`:** the ordered workload identities
+   in `W_t`, `C_old,t`, external `A_t`, budget `B`, and only those other lawful
+   features explicitly registered before evaluation.
+2. **Current-session revealed responses:** only exact responses returned by
+   charged `reveal(q, C)` calls in `E_t`, up to `B`.
+3. **Strictly earlier-window evidence:** time-causal state produced by windows
+   before `t`; it may be used only under a predeclared replay/state contract.
+4. **Hidden current-window ground truth:** the complete response table and
+   rankings used only to calculate `J_t`, regret, and evaluation diagnostics
+   after `C_hat,t` is fixed.
+
+Historical PR20c optimizer costs and the measured current-window configuration
+rankings are hindsight labels. They cannot enter policy features, initialize
+`E_t`, choose reveals, determine `C_hat,t`, or tune a policy on the same evaluated
+window. Historical action membership and legality may define the frozen external
+universe; historical response values may not become free evidence.
+
+Template identity may be a separately registered pre-decision descriptor, but it
+cannot replace exact-SQL response identity. In particular, a response to one SQL
+instance does not reveal the optimizer response for another SQL instance merely
+because both share a template identifier.
+
+## Variable Action Availability
+
+Configuration and action identity are different:
+
+- **Configuration identity** is the canonical ordered representation of the
+  complete index set and its stable `configuration_id`. Optimizer response
+  identity additionally includes `epoch_hash`.
+- **Swap-action identity** is the canonical narrow transformation
+  `DROP:(T,c1)|ADD:(T,c1,c2)`, including table, ordered key columns, dropped
+  prefix, and added composite. It is not the resulting configuration ID.
+- **Per-window legality** holds only when applying the action to `C_old,t`
+  produces a configuration explicitly present in external `A_t`. The evaluator
+  cannot synthesize or infer additional legal configurations.
+- **Action support** `S(a)` is the set of windows where action `a` is legal.
+  Pairwise common support is `S(a) intersect S(b)`; comparisons between actions
+  must report this intersection and its size.
+
+If a repeated fixed action is unavailable in window `t`, the required
+availability-aware fallback is `C_old,t`, not a different unregistered swap.
+Action-only results must report `S(a)` separately; end-to-end fixed-policy
+results must include the incumbent-fallback windows. An action legal in only
+three windows must not be compared with a globally available fixed action as if
+their support, exposure, or opportunity were equal.
+
+## Required Offline Baselines
+
+A later offline evaluation must specify, but this PR does not implement, the
+following baselines:
+
+- **Incumbent `C_old`:** use `C_old,t` with zero probes.
+- **Zero-probe availability-aware fixed action:** predeclare one swap-action
+  identity; apply it when legal and otherwise use `C_old,t`. Report both its
+  legal support and its all-window result. No current-window response may be
+  used to choose the action.
+- **Random reveal:** for each `B`, use a seeded random order over eligible,
+  previously unrevealed exact `(q,C,epoch)` response keys, stop after at most
+  `B` charged probes, and choose from `A_t` using a predeclared partial-evidence
+  score and tie-break. Report results over registered seeds.
+- **Uniform reveal:** for each `B`, allocate exact reveals as evenly as possible
+  across legal configurations and ordered workload occurrences, skipping keys
+  already revealed in the session, then use the same predeclared partial-evidence
+  score and tie-break as random reveal.
+- **Full-information oracle:** use hidden complete `J_t(C)` values to select
+  `C_star,t`. This is an evaluation lower bound with zero regret, not a lawful
+  budgeted policy and not evidence-feasibility proof.
+
+All baselines use the same external `A_t`, the same ordered `W_t`, and the same
+occurrence-weighted `J_t`. They may not substitute isolated action effects,
+template averages, a different candidate universe, or a differently weighted
+objective.
+
+## Gate Before Any Offline Model 1 Implementation
+
+Before opening an offline algorithm task, Planning & Review must accept a
+separate evaluation specification that defines:
+
+- the complete list of lawful pre-decision features and their availability
+  time;
+- a policy-probe budget grid, including `B = 0` and declared saturation/full
+  reference points;
+- replay ordering and time-causal state updates, including reset boundaries;
+- leakage checks for current-window responses, rankings, regret labels,
+  cross-window exact-key reuse, feature fitting, and tuning;
+- a discovery/future-holdout boundary fixed before policy comparison;
+- absolute and normalized regret outputs at per-window and aggregate levels;
+- probe-efficiency outputs that retain both probes used and regret, including
+  regret-versus-budget comparisons; and
+- fixed random seeds, tie-breaking, support accounting, and failure behavior.
+
+The existing static TPCH/TPCHS response holdout is not automatically a valid
+Model 1 holdout. It lacks the same competing-action and variable-legality
+structure, so it cannot establish generalization for this decision problem
+without a separately accepted comparability argument and evaluation design.
+
+Passing this specification gate would authorize only a later offline evaluation
+task. It would not authorize candidate generation, a selector or ranker change,
+an online policy, physical transitions, or PR21b-online.
 
 ## Required Guardrails
 
@@ -508,6 +745,8 @@ The following are out of scope for this phase:
 - reopening PR20g;
 - adding candidate-generation experiments;
 - introducing MAB/RL implementation;
+- implementing a novel reveal/acquisition algorithm or Model 1 policy;
+- changing the Evaluation Substrate or its probe-accounting contract;
 - introducing online exploration;
 - adding new runtime trace fields in code;
 - adding tests that alter behavior;
@@ -517,6 +756,9 @@ The following are out of scope for this phase:
 - adopting predictive workload synthesis;
 - width-3 expansion;
 - joint candidate-generation and selector optimization.
+- running PostgreSQL, HypoPG, a new optimizer measurement, or a new benchmark;
+- accessing a sealed holdout;
+- claiming Model 1 evidence feasibility or Model 1 success.
 
 ## Acceptance Criteria For This Spec
 
@@ -554,11 +796,41 @@ This amendment is complete when:
 - no runtime code, tests, selector, generator, budget, scoring,
   `optimizer_ratio`, or materialization behavior is changed.
 
+The current-epoch ambiguity amendment is complete when it also:
+
+- records the authoritative Evaluation Substrate tag, commit, attempt, counts,
+  environment boundary, and optimizer-cost-only scope;
+- records `MODEL1_DECISION_AMBIGUITY_GATE_PASSED`,
+  `MODEL1_EVIDENCE_FEASIBILITY_UNTESTED`, and `PR21B_ONLINE_BLOCKED`;
+- limits the static-fixed-action conclusion to JOB random, the frozen PR20c
+  prefix-swap universe, optimizer cost, and the measured epoch;
+- defines `W_t`, `C_old,t`, external `A_t`, `B`, an initially empty evidence
+  session, exact-key `reveal(q,C)` charging, legal output, `J_t`, absolute
+  regret, and separately reported normalized regret;
+- separates pre-decision information, current-session reveals, earlier-window
+  state, and hidden current-window evaluation labels;
+- forbids hindsight response/ranking leakage and template-for-exact-response
+  substitution;
+- defines configuration identity, swap-action identity, per-window legality,
+  support-aware comparison, and incumbent fallback;
+- requires incumbent, availability-aware fixed-action, random-reveal,
+  uniform-reveal, and full-information-oracle baselines on the same universe and
+  occurrence-weighted objective; and
+- leaves offline implementation blocked until lawful features, budget grid,
+  causal replay, leakage tests, discovery/holdout boundary, regret outputs, and
+  probe-efficiency outputs are accepted.
+
 ## Current Conclusion
 
-PR21b-design/spec is justified.
+PR21b-design/spec is justified, and the accepted state is:
 
-PR21b-online remains blocked.
+```text
+MODEL1_DECISION_AMBIGUITY_GATE_PASSED
+MODEL1_EVIDENCE_FEASIBILITY_UNTESTED
+PR21B_ONLINE_BLOCKED
+```
 
-The next valid step is review of the design requirements above, not runtime
-implementation.
+The next valid step is Planning & Review of this amended design contract and,
+only after its offline-implementation gate is separately satisfied, a bounded
+offline evaluation task. Runtime implementation, online activation, and a Model
+1 success claim remain unearned.
