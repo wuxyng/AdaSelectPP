@@ -80,6 +80,7 @@ def _make_tuner(*, workload_count=2, gen_mode="grow", appearing=None, meta_map=N
     def fake_test(self, idx, query_indexes, base_costs, base_total, old_conf, workload):
         evaluated.append(idx)
         self._last_obs_delta_map[idx] = 1.0
+        return "COMPLETE"
 
     def fake_replacement(self, idx, query_indexes, base_costs, base_total, old_conf, workload):
         replacement.append(idx)

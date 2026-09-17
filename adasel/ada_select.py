@@ -24,6 +24,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from adasel.measurement import COMPLETE, BUDGET_DEFER, EVALUATION_FAILED, CONTEXT_INVALID
 from adaselect_pp.common import sql_only
 from util.benefit_normalizer import BenefitNormalizer
 from adaselect_pp.candidate_gen_v2 import MCIGCandidateGenerator
@@ -112,6 +113,7 @@ class AdaSelect:
         self.ts_gate_regress = 0.05
         self.ts_mad_floor_rel = 1e-6
         self.ts_sign_decay = 0.90
+        self.width2_add_full_window = False
         self.wdcg_enabled = True
         self.replacement_overlay_enabled = False
         self.pair_supply_ceiling_enabled = False
@@ -285,6 +287,7 @@ class AdaSelect:
         self.ts_sign_decay = float(cfg.get("ts_sign_decay", self.ts_sign_decay))
         if self.lambda_min > self.lambda_max:
             self.lambda_min, self.lambda_max = self.lambda_max, self.lambda_min
+        self.width2_add_full_window = coerce_bool_flag(cfg.get("width2_add_full_window", False))
         self.wdcg_enabled = bool(cfg.get("wdcg_enabled", self.wdcg_enabled))
         replacement_overlay_cfg = cfg.get("replacement_overlay_enabled", self.replacement_overlay_enabled)
         if isinstance(replacement_overlay_cfg, str):
@@ -338,6 +341,7 @@ class AdaSelect:
             "transition_mode": self.transition_mode,
             "rsfe_decay": self.rsfe_decay,
             "lambda_policy": self.lambda_policy,
+            "width2_add_full_window": self.width2_add_full_window,
             "wdcg_enabled": self.wdcg_enabled,
             "replacement_overlay_enabled": self.replacement_overlay_enabled,
             "pair_supply_ceiling_enabled": self.pair_supply_ceiling_enabled,
@@ -807,7 +811,27 @@ class AdaSelect:
         )
         return lam_used, lam_used, policy
 
-    def _test_candidate(self, idx_key: IndexKey, query_indexes: List[Set[IndexKey]], base_costs: List[float], base_total: float, old_conf: Set[IndexKey], workload: List[str]) -> None:
+    def _test_candidate(self, idx_key: IndexKey, query_indexes: List[Set[IndexKey]], base_costs: List[float], base_total: float, old_conf: Set[IndexKey], workload: List[str]) -> str:
+        repair = bool(getattr(self, "width2_add_full_window", False) and
+                      len(idx_key[1]) == 2 and idx_key not in old_conf)
+        mask_hits = sum(idx_key in qs for qs in query_indexes)
+        required = len(workload) if repair else mask_hits
+        outcome = {"index": idx_key, "full_window": repair, "query_mask_hits": mask_hits,
+                   "measured_occurrences": 0, "required_qcp": required, "status": None}
+        self._last_candidate_observation = outcome
+        if repair:
+            valid_shape = (bool(workload) and len(workload) == len(base_costs) == len(query_indexes)
+                           and all(math.isfinite(float(c)) for c in base_costs)
+                           and math.isfinite(float(base_total))
+                           and math.isclose(sum(base_costs), base_total, abs_tol=1e-8, rel_tol=1e-10))
+            validate = getattr(self.cost_eval, "validate_full_add_context", None)
+            if not valid_shape or validate is None or not validate(workload, base_costs, old_conf, idx_key):
+                outcome["status"] = CONTEXT_INVALID
+                return CONTEXT_INVALID
+        budget = getattr(self.cost_eval, "qcp_budget", None)
+        if budget is not None and not budget.fits(required):
+            outcome["status"] = BUDGET_DEFER
+            return BUDGET_DEFER
         tbl, cols = idx_key
         if idx_key in old_conf:
             self.db_con2.disable_index(tbl, cols)
@@ -815,18 +839,27 @@ class AdaSelect:
             self.db_con1.create_index(tbl, cols)
         total_cost = 0.0
         hit_cnt = ok_cnt = fail_cnt = 0
+        target_costs = []
         try:
             for i, (q_idxs, base_cost) in enumerate(zip(query_indexes, base_costs)):
-                if idx_key in q_idxs:
+                if repair or idx_key in q_idxs:
                     hit_cnt += 1
                     self._m_stats["what_if_calls"] += 1
                     try:
-                        total_cost += float(self.cost_eval.calculate_now_cost([workload[i]]))
+                        value = float(self.cost_eval.calculate_now_cost([workload[i]]))
+                        if repair and (not math.isfinite(value) or value < 0):
+                            raise ValueError("invalid full-window target cost")
+                        total_cost += value
+                        target_costs.append((i, value))
                         ok_cnt += 1
                     except Exception as e:
                         logger.warning("what-if failed for q%d idx=%s: %s", i, idx_key, e)
-                        total_cost += float(base_cost)
                         fail_cnt += 1
+                        if repair:
+                            outcome.update(status=EVALUATION_FAILED, measured_occurrences=ok_cnt,
+                                           failure=str(e))
+                            return EVALUATION_FAILED
+                        total_cost += float(base_cost)
                 else:
                     total_cost += float(base_cost)
         finally:
@@ -834,6 +867,12 @@ class AdaSelect:
                 self.db_con2.enable_index(tbl, cols)
             else:
                 self.db_con1.drop_index(tbl, cols)
+        if repair and not math.isfinite(total_cost):
+            outcome.update(status=EVALUATION_FAILED, measured_occurrences=ok_cnt)
+            return EVALUATION_FAILED
+        if repair and not validate(workload, base_costs, old_conf, idx_key):
+            outcome.update(status=CONTEXT_INVALID, measured_occurrences=ok_cnt)
+            return CONTEXT_INVALID
         delta = float(base_total - total_cost) if idx_key not in old_conf else float(total_cost - base_total)
         prev = float(self.columns_benefit.get(idx_key, 0.0))
         if hit_cnt <= 0:
@@ -858,10 +897,15 @@ class AdaSelect:
         self._last_obs_delta_map[idx_key] = delta
         self._last_obs_src_map[idx_key] = obs_src
         self.idx_last_obs_src[idx_key] = obs_src
+        outcome.update(status=COMPLETE, measured_occurrences=ok_cnt, raw_delta=delta,
+                       masked_shadow_delta=sum(base_costs[i] - value for i, value in target_costs
+                                               if idx_key in query_indexes[i]),
+                       lambda_used=lam, mu=new_benefit, observation_source=obs_src)
         logger.debug(
             "benefit %s: %.4f -> %.4f delta=%.4f lambda=%.3f shadow=%.3f policy=%s src=%s hit=%d ok=%d fail=%d",
             idx_key, prev, new_benefit, delta, lam, lam_shadow, lam_policy, obs_src, hit_cnt, ok_cnt, fail_cnt,
         )
+        return COMPLETE
 
     def _record_structural_pair_replacement_diagnostic(
         self,
@@ -901,6 +945,13 @@ class AdaSelect:
             self._bump_replacement_metric("replacement_diag_time", (time.perf_counter() - diag_start) * 1000.0)
             return
 
+        budget = getattr(self.cost_eval, "qcp_budget", None)
+        required = sum(pair in qs or left_prefix in qs for qs in query_indexes)
+        if budget is not None and not budget.fits(required):
+            diag["replacement_obs_src"] = BUDGET_DEFER
+            diag["required_qcp"] = required
+            self._bump_replacement_metric("replacement_diag_time", (time.perf_counter() - diag_start) * 1000.0)
+            return
         tbl, cols = pair
         disabled_left = False
         created_pair = False
@@ -1441,9 +1492,12 @@ class AdaSelect:
         before_replacement_what_if = float(self._last_wdcg_stats.get("replacement_what_if_calls", 0.0) or 0.0)
         replacement_diag_count = 0
 
+        completed = []
         for pair in selected:
-            self._test_candidate(pair, query_indexes, base_costs, base_total, old_conf, workload)
-            self._last_evaluated_set.add(pair)
+            status = self._test_candidate(pair, query_indexes, base_costs, base_total, old_conf, workload)
+            if status == COMPLETE:
+                self._last_evaluated_set.add(pair)
+                completed.append(pair)
             if pair not in self._last_eval_order:
                 self._last_eval_order.append(pair)
             self._record_structural_pair_replacement_diagnostic(
@@ -1455,7 +1509,7 @@ class AdaSelect:
         after_replacement_what_if = float(self._last_wdcg_stats.get("replacement_what_if_calls", 0.0) or 0.0)
         shadowing_revealed = 0
         nonbeneficial = 0
-        for pair in selected:
+        for pair in completed:
             diag = self._last_structural_pair_replacement_map.get(pair, {})
             try:
                 marginal = float(self._last_obs_delta_map.get(pair, 0.0) or 0.0)
@@ -1475,8 +1529,8 @@ class AdaSelect:
             "fairness_eval_lane_enabled": 1,
             "fairness_eval_lane_quota": quota,
             "fairness_eval_lane_candidate_count": int(len(postround)),
-            "fairness_eval_lane_evaluated_count": int(len(selected)),
-            "fairness_eval_lane_evaluated_pairs": self._fmt_config(set(selected)),
+            "fairness_eval_lane_evaluated_count": int(len(completed)),
+            "fairness_eval_lane_evaluated_pairs": self._fmt_config(set(completed)),
             "fairness_eval_lane_replacement_diag_count": int(replacement_diag_count),
             "fairness_eval_lane_skipped_already_evaluated_count": int(len(already)),
             "fairness_eval_lane_budgeted_out_count": int(max(0, len(ranked) - len(selected))),
@@ -1485,7 +1539,7 @@ class AdaSelect:
             "fairness_eval_lane_shadowing_revealed_count": int(shadowing_revealed),
             "fairness_eval_lane_nonbeneficial_count": int(nonbeneficial),
         })
-        return len(selected)
+        return len(completed)
 
     @staticmethod
     def _pair_fate_examples(fate_map: Dict[IndexKey, str], fate: str, limit: int = 5) -> str:
@@ -1931,9 +1985,10 @@ class AdaSelect:
         trials = 0
         before_whatif = int(self._m_stats["what_if_calls"])
         for idx in eval_candidates:
-            self._test_candidate(idx, query_indexes, base_costs, base_total, old_conf, workload)
-            self._last_evaluated_set.add(idx)
-            trials += 1
+            status = self._test_candidate(idx, query_indexes, base_costs, base_total, old_conf, workload)
+            if status == COMPLETE:
+                self._last_evaluated_set.add(idx)
+                trials += 1
             if idx in selected_structural_pairs:
                 self._record_structural_pair_replacement_diagnostic(
                     idx, query_indexes, base_costs, base_total, old_conf, workload

@@ -51,6 +51,7 @@ def test_enabled_lane_evaluates_target_pair_and_runs_replacement_after_test():
         calls.append(("test", pair))
         tuner._last_obs_delta_map[pair] = -1.0
         tuner._m_stats["what_if_calls"] += 3
+        return "COMPLETE"
 
     def fake_replacement(pair, *_args):
         calls.append(("replacement", pair, tuner._last_obs_delta_map.get(pair)))
@@ -88,6 +89,7 @@ def test_quota_is_respected_and_target_priority_beats_fairness_order():
 
     def fake_test(pair, *_args):
         evaluated.append(pair)
+        return "COMPLETE"
 
     def fake_replacement(pair, *_args):
         tuner._last_structural_pair_replacement_map[pair] = {"replacement_net_benefit": 0.0}
@@ -107,7 +109,7 @@ def test_already_evaluated_pairs_are_skipped():
     tuner = _tuner(enabled=True, quota=2, postround={PAIR_AB, PAIR_AC})
     tuner._last_evaluated_set = {PAIR_AB}
     evaluated = []
-    tuner._test_candidate = lambda pair, *_args: evaluated.append(pair)
+    tuner._test_candidate = lambda pair, *_args: (evaluated.append(pair), "COMPLETE")[1]
     tuner._record_structural_pair_replacement_diagnostic = lambda pair, *_args: None
 
     tuner._run_fairness_eval_lane([], [], 0.0, set(), [])
