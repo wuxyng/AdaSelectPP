@@ -5,6 +5,23 @@ Base: `a2d70bfe36b5c45ca1c519c715f5e6051de6ca0e`. Existing draft PR #43.
 Status: **implementation submitted for independent re-verification; release remains BLOCKED**.
 No database connection, live preflight, workload acceptance or parameter tuning is authorized by this fix.
 
+### Independent re-audit follow-up
+
+Re-audit of `ebffc7119acb7e08813ad728188d6c03947dff90` found two remaining
+interruption/persistence edges. The follow-up registers QCP uncertainty before charging,
+reconciles charges if interrupted inside the base meter, and requires confirmed responses
+to equal charges before declaring an exact actual count (including preflight).
+Final run-checkpoint write failures now remain secondary to an existing primary exception,
+are recorded separately, and leave unavailable persistence explicitly incomplete.
+
+The auditor's two original acceptance tests were executed unchanged: **2 failed before
+the follow-up, 2 passed afterward**. Its full independent edge suite plus five checked-in
+gap/persistence regressions: **13 passed**. Evidence is retained separately in
+`E:/AdaSelectPP-core-slimming-v2-results/execution_audit_fix_r2`; the earlier submission's
+artifacts remain unchanged. Final pure suite: **365 passed**; Linux behavior and real
+inert-child suite: **33 passed**, both with zero skips. This follow-up does not authorize
+a database run.
+
 ## Scope and error semantics
 
 Only execution, resource receipts, supervision, offline reporting and their tests change.

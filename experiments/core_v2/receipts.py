@@ -40,7 +40,15 @@ class ReceiptMeter(Meter):
             raise CampaignStop('QCP_RECEIPT_WRITE_FAILED:' + str(exc)) from exc
 
     def begin(self):
-        token = super().begin()
+        # Register uncertainty before the base meter can charge. A signal may
+        # arrive between any of its Python statements, including charge/count.
+        self.inflight = dict(stage='CHARGING', window=self.current_window)
+        before_used, before_attempts = self.budget.used, self.attempts
+        try:
+            token = super().begin()
+        except BaseException:
+            self.attempts = before_attempts + (self.budget.used - before_used)
+            raise
         self.inflight = token
         self.save()  # durable intent before transport dispatch
         return token
@@ -55,6 +63,11 @@ class ReceiptMeter(Meter):
             self.uncertain += 1
         self.inflight = None
         self.save()
+
+    @property
+    def counts_complete(self):
+        return (self.inflight is None and self.uncertain == 0 and
+                self.confirmed == self.attempts)
 
 
 def qcp_receipt(manifest, cap, checkpoint=None):

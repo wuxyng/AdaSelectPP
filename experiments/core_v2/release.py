@@ -157,7 +157,7 @@ def preflight(out,deadline):
         assert meter.attempts<=30
         status='PASS'
     finally:
-        m['preflight']=dict(status=status,attempts=meter.attempts,actual_attempts=meter.confirmed if not meter.uncertain and meter.inflight is None else None,
+        m['preflight']=dict(status=status,attempts=meter.attempts,actual_attempts=meter.confirmed if meter.counts_complete else None,
                             runtime_checks=sum(c['test']=='execute_occurrence' for r in receipts for c in r['checks']),databases=receipts)
         write_json(out/'run_manifest.json',m)
 
@@ -179,7 +179,7 @@ def run_one(out,name,deadline):
 
     def checkpoint(final=False):
         wall=time.monotonic()-started;rec=wall-exec_wall-trans_wall
-        complete_counter=meter is not None and meter.inflight is None and meter.uncertain==0
+        complete_counter=meter is not None and meter.counts_complete
         manifest.update(status=status if final else 'RUNNING',rounds=len(rows),
                         exec_s=exec_total,exec_observed_s=observed_total,exec_protocol_penalty_s=penalty_total,
                         exec_wall_s=exec_wall,rec_s=rec,trans_s=trans_wall,total_s=exec_total+rec+trans_wall,
@@ -344,6 +344,11 @@ def run_one(out,name,deadline):
             cleanup_s=time.monotonic()-cleanup0;trans_wall+=cleanup_s
             if secondary:status='INCOMPLETE'
             try:checkpoint(final=True)
+            except BaseException as receipt_error:
+                status='INCOMPLETE'
+                error_record(receipt_error,'final_checkpoint')
+                if primary is None:primary=receipt_error
+                primary.secondary_errors=tuple(secondary)
             finally:signal.signal(signal.SIGTERM,old_handler)
     if primary is not None:raise primary
     if secondary:raise CampaignStop('FINALIZATION_FAILED:'+str(secondary))
