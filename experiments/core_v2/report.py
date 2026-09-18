@@ -3,6 +3,8 @@ import argparse
 import csv
 import json
 from pathlib import Path
+from database.execution_errors import classify_error
+from experiments.core_v2.receipts import qcp_receipt
 
 ROOT=Path(__file__).resolve().parents[2]
 def read(p):return json.loads(Path(p).read_text(encoding='utf-8'))
@@ -13,13 +15,27 @@ def summarize(out):
     registration=read(out/'run_manifest.json')
     historical=read(ROOT/'experiments/reproduce/reference/HISTORICAL_RATIO_METADATA.json')['historical_optimizer_ratio_by_case']
     result=[]
+    launched={j['job'][1] for j in registration.get('started_jobs',[]) if j['job'][0]=='run'}
     for case in registration['profiles']['cases']:
         d=out/'runs'/case['name'];mp=d/'run_manifest.json'
-        if not mp.exists():
+        if not mp.exists() and case['name'] not in launched:
             result.append(dict(workload=case['name'],status='NOT_STARTED',rounds=0,expected_rounds=case['rounds']))
             continue
-        m=read(mp);rows=list(csv.DictReader((d/'rounds.csv').open(encoding='utf-8')))
-        m.update(workload=case['name'],expected_rounds=case['rounds'])
+        m=read(mp) if mp.exists() else dict(status='MISSING_WORKER_RECEIPT',rounds=0)
+        rows=list(csv.DictReader((d/'rounds.csv').open(encoding='utf-8'))) if (d/'rounds.csv').exists() else []
+        checkpoint=read(d/'qcp_receipt.json') if (d/'qcp_receipt.json').exists() else {}
+        m.update(qcp_receipt(m,sum(case['qcp_budget_per_window']),checkpoint))
+        m['resources_complete']=m.get('resources_complete',m['status'] in ('COMPLETE','INCOMPLETE'))
+        m['timing_status']='FINALIZED' if m['resources_complete'] else 'INCOMPLETE_KNOWN_LOWER_BOUNDS_ONLY'
+        if not m['resources_complete']:
+            m['known_timing_lower_bounds']={k:m.get(k) for k in ('exec_observed_s','exec_protocol_penalty_s','exec_wall_s','rec_s','trans_s','explain_s')}
+            if checkpoint:
+                m['known_timing_lower_bounds']['explain_s']=checkpoint.get('explain_s')
+            m['total_s']=None
+        m.update(workload=case['name'],expected_rounds=case['rounds'],rounds=len(rows))
+        parent=next((j for j in registration.get('started_jobs',[]) if j['job']==['run',case['name']]),{})
+        m['parent_recovery_s']=parent.get('parent_recovery_s')
+        m['parent_recovery']=parent.get('recovery')
         m['beyond_historical_nomination_complete']=0;m['beyond_historical_nomination_qcp']=0
         m['beyond_historical_nomination_full']=0;m['full_qcp']=0;m['full_requested']=0
         m['budget_limited_rounds']=0;m['baseline_hold_rounds']=0
@@ -48,12 +64,16 @@ def summarize(out):
             m['budget_limited_rounds']+=int(r['deferred'])>0
             m['baseline_hold_rounds']+=r['baseline_status']!='COMPLETE'
         recorded_qcp=sum(int(r['qcp_used']) for r in rows)
-        m['unfinished_round_qcp']=m['qcp_used']-recorded_qcp
-        assert m['unfinished_round_qcp']>=0
+        m['unfinished_round_qcp']=m['qcp_used']-recorded_qcp if m['qcp_used'] is not None else None
+        assert m['unfinished_round_qcp'] is None or m['unfinished_round_qcp']>=0
         if m['status']=='COMPLETE':assert m['unfinished_round_qcp']==0
         errors=[json.loads(s) for s in (d/'error_events.jsonl').read_text().splitlines()] if (d/'error_events.jsonl').exists() else []
-        m['execution_protocol_errors']=sum('occurrence' in e and not e.get('sqlstate') for e in errors)
-        m['performance_metrics_valid']=m['status']=='COMPLETE' and not m['execution_protocol_errors']
+        classified=[classify_error(e) for e in errors if 'occurrence' in e]
+        m['execution_protocol_errors']=sum(e['fatal'] for e in classified)
+        m['execution_timeout_penalties']=sum(not e['fatal'] for e in classified)
+        m['fatal_failures']=sum(classify_error(e)['fatal'] for e in errors if e.get('event')!='measurement_failed')
+        m['performance_metrics_valid']=(m['status']=='COMPLETE' and not m['fatal_failures']
+                                        and m['qcp_counters_complete'] and m['resources_complete'])
         if m['status']=='COMPLETE':assert len(rows)==case['rounds'] and m['exact_restoration']
         events=[json.loads(s) for s in (d/'ddl_events.jsonl').read_text().splitlines()] if (d/'ddl_events.jsonl').exists() else []
         counts={'create':0,'drop':0};times={'create':0.,'drop':0.};pending=None
@@ -65,15 +85,19 @@ def summarize(out):
                 assert pending is not None
                 times[pending]+=event['elapsed_ms']/1000;pending=None
         m['ddl_attempt_counts']=counts;m['ddl_attempt_seconds']=times
+        m['ddl_timing_complete']=pending is None
+        if pending is not None:
+            m['ddl_unfinished_kind']=pending
+            m['resources_complete']=False;m['performance_metrics_valid']=False
         result.append(m)
     complete=[m for m in result if m['status']=='COMPLETE']
     started=[m for m in result if m['status']!='NOT_STARTED']
     gates={
         'registered_preflight':registration.get('preflight',{}).get('status')=='PASS',
         'nine_workloads_603_windows':len(complete)==9 and sum(m['rounds'] for m in complete)==603,
-        'qcp_and_no_stranded_work':all(m.get('stranded_budget',0)==0 for m in result) and sum(m.get('qcp_used',0) for m in result)<=22271,
+        'qcp_and_no_stranded_work':bool(started) and all(m.get('qcp_counters_complete') and m.get('stranded_budget')==0 for m in started) and sum(m['qcp_budget_charge'] for m in started)<=22271,
         'restoration_for_started_runs':bool(started) and all(m.get('exact_restoration') for m in started),
-        'single_frozen_version_and_stop':bool(started) and len({m['revision'] for m in started})==1 and registration['automatic_followup']=='STOP',
+        'single_frozen_version_and_stop':bool(started) and all(m.get('revision') for m in started) and len({m.get('revision') for m in started})==1 and registration['automatic_followup']=='STOP',
         'runtime_protocol':len(complete)==9 and all(m.get('performance_metrics_valid') for m in complete),
     }
     report=dict(status='CORE_V2_READY' if all(gates.values()) else 'CORE_V2_BLOCKED',gates=gates,
@@ -93,7 +117,8 @@ def main():
            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for m in report['workloads']:
         if m['status']!='COMPLETE':
-            qcp=f"{m['qcp_used']}/{m.get('qcp_cap','unknown')}" if 'qcp_used' in m else '—'
+            qcp=(f"{m['qcp_actual_attempts']}/{m.get('qcp_cap','unknown')}" if m.get('qcp_actual_attempts') is not None
+                 else f"actual unknown; charge {m.get('qcp_budget_charge','unknown')}/{m.get('qcp_cap','unknown')}" if m['status']!='NOT_STARTED' else '—')
             state='INVALID_EXECUTION' if m.get('execution_protocol_errors') else m['status']
             lines.append(f"| {m['workload']} | {m['rounds']}/{m['expected_rounds']} ({state}) | — | — | — | — | — | {qcp} | — | — | — |")
             continue

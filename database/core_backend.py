@@ -7,6 +7,7 @@ from tools.evaluation_substrate.schema import ConfigurationSpec, IndexDefinition
 from tools.evaluation_substrate.reveal import OptimizerRevealError
 from adaselect_pp.common import sql_only
 from adasel.measurement import QCPBudget
+from database.execution_errors import classify_error
 
 
 def config(items):
@@ -96,6 +97,10 @@ class Backend(NativeDatabase):
             except Exception as exc:
                 if isinstance(exc, OptimizerRevealError):
                     raise CampaignStop('SAFETY_OR_IDENTITY_FAILURE:'+str(exc)) from exc
+                if classify_error(exc)['fatal']:
+                    failure=CampaignStop('FATAL_OPTIMIZER_FAILURE:'+str(exc))
+                    failure.execution_event=classify_error(exc)
+                    raise failure from exc
                 raise
             total += result.optimizer_cost
         return total

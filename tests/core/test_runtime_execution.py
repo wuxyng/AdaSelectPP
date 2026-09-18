@@ -40,13 +40,14 @@ def test_programming_or_connection_error_never_becomes_timeout(failure):
 def test_postgres_timeout_preserves_original_penalty_and_sqlstate():
     class PostgreSQLTimeout(Exception):pgcode='57014'
     runtime,error=execute_occurrence(Connection(failure=PostgreSQLTimeout('timeout')),'SELECT 1',30000,meter())
-    assert runtime==30000. and error==dict(error='timeout',sqlstate='57014')
+    assert runtime==30000. and error['error']=='timeout' and error['sqlstate']=='57014'
+    assert error['classification']=='PROTOCOL_TIMEOUT' and not error['fatal']
 
 
 @pytest.mark.parametrize('sql',['UPDATE t SET a=1','SELECT 1; SELECT 2'])
 def test_runtime_sql_validation_stops_before_any_database_request(sql):
     c=Connection()
-    with pytest.raises(Exception):execute_occurrence(c,sql,30000,meter())
+    with pytest.raises(CampaignStop):execute_occurrence(c,sql,30000,meter())
     assert not c.statements
 
 

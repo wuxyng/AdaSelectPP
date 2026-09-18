@@ -48,7 +48,7 @@ def main():
     tracked=subprocess.check_output(['git','ls-files'],cwd=ROOT).decode().splitlines()
     prefixes=('adasel/','adaselect_pp/candidate_gen_v2/','adaselect_pp/common/','tools/evaluation_substrate/',
               'experiments/core_v2/','txt/')
-    singles={'database/__init__.py','database/safe_backend.py','database/core_backend.py','database/hypopg_action_scope.py',
+    singles={'database/__init__.py','database/safe_backend.py','database/core_backend.py','database/execution_errors.py','database/hypopg_action_scope.py',
              'util/__init__.py','util/benefit_normalizer.py','util/indexable_columns.py','adaselect_pp/__init__.py'}
     files={name:sha(ROOT/name) for name in tracked if name.startswith(prefixes) or name in singles}
     checkpoints={}
@@ -62,7 +62,7 @@ def main():
                   previous_registration_sha256=sha(a.previous),snapshot_checkpoints=checkpoints,
                   expected_indexes=previous['expected_indexes'],policy_cache='NONE; occurrence-paid; no preload; no carry',
                   constants=dict(POLICY_DEFAULTS),status='REGISTERED_NOT_STARTED',automatic_followup='STOP',
-                  time_definition='exec=original EXPLAIN ANALYZE Plan.Actual Total Time plus original error penalty; rec=inclusive run wall minus execution wall and transition wall; trans=owned DDL, reset and final cleanup; total=exec+rec+trans')
+                  time_definition='exec=observed EXPLAIN ANALYZE Plan.Actual Total Time plus separately reported historical statement-timeout penalty; fatal failures stop and have no penalty; rec=inclusive run wall minus execution wall and transition wall; trans=owned DDL, reset and final cleanup; total=exec+rec+trans; unfinalized timing fields are known lower bounds, not complete measurements')
     (a.output/'run_manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(dict(commit=head,files=len(files),runs=9,windows=603,qcp_cap=22271,output=str(a.output))))
 

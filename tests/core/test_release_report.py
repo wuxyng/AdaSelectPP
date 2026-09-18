@@ -43,3 +43,27 @@ def test_interrupted_round_qcp_is_counted_and_bad_execution_is_invalid(tmp_path)
     result=summarize(tmp_path);case=result['workloads'][0]
     assert case['unfinished_round_qcp']==3 and case['execution_protocol_errors']==1
     assert not case['performance_metrics_valid'] and result['status']=='CORE_V2_BLOCKED'
+
+
+def test_missing_started_worker_is_unknown_and_not_an_unstarted_zero(tmp_path):
+    registration=dict(profiles={'cases':[dict(name='tpch_shifting',rounds=1,round_size=2,qcp_budget_per_window=[14])]},
+                      started_jobs=[dict(job=['run','tpch_shifting'])],automatic_followup='STOP')
+    (tmp_path/'run_manifest.json').write_text(json.dumps(registration))
+    result=summarize(tmp_path);case=result['workloads'][0]
+    assert case['status']=='MISSING_WORKER_RECEIPT' and case['qcp_used'] is None
+    assert case['qcp_actual_attempts'] is None and case['qcp_budget_charge']==14
+    assert case['total_s'] is None and not case['resources_complete']
+    assert result['gates']['qcp_and_no_stranded_work'] is False
+
+
+def test_archived_fatal_sqlstate_cannot_be_reported_as_performance_valid(tmp_path):
+    # Exercise the offline reader on an old COMPLETE artifact, not only new events.
+    test_offline_boundary_report_uses_actual_paid_observations_and_checks_accounting(tmp_path)
+    d=tmp_path/'runs'/'tpch_shifting'
+    path=d/'rounds.csv';rows=list(csv.DictReader(path.open()))
+    rows[0]['qcp_used']='14'
+    with path.open('w',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=rows[0]);writer.writeheader();writer.writerows(rows)
+    (d/'error_events.jsonl').write_text(json.dumps(dict(window=0,occurrence=0,sqlstate='08006',error='connection failure'))+'\n')
+    case=summarize(tmp_path)['workloads'][0]
+    assert case['execution_protocol_errors']==1 and not case['performance_metrics_valid']
