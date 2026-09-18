@@ -56,4 +56,4 @@ class GenerationResult:
     topk_set: Set[IndexKey]
     score_map: Dict[IndexKey, float]
     meta_map: Dict[IndexKey, Dict[str, Any]]
-    stats: Dict[str, Any]
+    stage: str

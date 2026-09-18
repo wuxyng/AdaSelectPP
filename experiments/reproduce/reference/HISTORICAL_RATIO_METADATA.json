@@ -1,0 +1,17 @@
+{
+  "status": "HISTORICAL_ONLY_NOT_A_CORE_INPUT",
+  "source": "adaselectpp_core_slimming_v1/RELEASE_PROFILES.json",
+  "source_sha256": "64d6a0369325843545f2e09e40762ea4fe1b140ccfba5b444fd569ee3b232353",
+  "note": "These old ratios document the profile ancestry only. Do not load them in Core, convert them into B_t, or derive evaluation job caps.",
+  "historical_optimizer_ratio_by_case": {
+    "tpch_shifting": 0.5,
+    "tpch_noisy": 0.5,
+    "tpch_random": 0.5,
+    "tpchs_shifting": 0.5,
+    "tpchs_noisy": 0.5,
+    "tpchs_random": 0.5,
+    "job_shifting": 0.25,
+    "job_noisy": 0.25,
+    "job_random": 0.25
+  }
+}
