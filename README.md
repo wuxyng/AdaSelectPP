@@ -1,5 +1,7 @@
 # AdaSelectPP Core v2
 
+**Release status: CORE_V2_BLOCKED.** Pure tests pass, but the first live attempt was invalidated by a runtime-driver wiring error and stopped with exact restoration. The driver was corrected and tested without restarting the database campaign. See [release outcome](docs/CORE_RELEASE_RESULT.md).
+
 One online policy: bounded `probe_grow_fair` candidates, full-window ADD observations for new width-2 indexes, adaptive benefit history, a single QCP budget, and the original conservative selector.
 
 ## Policy inputs

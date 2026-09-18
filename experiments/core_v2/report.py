@@ -47,7 +47,13 @@ def summarize(out):
                     m['beyond_historical_nomination_full']+=o['scope']=='FULL_WINDOW_ADD'
             m['budget_limited_rounds']+=int(r['deferred'])>0
             m['baseline_hold_rounds']+=r['baseline_status']!='COMPLETE'
-        assert sum(int(r['qcp_used']) for r in rows)==m['qcp_used']
+        recorded_qcp=sum(int(r['qcp_used']) for r in rows)
+        m['unfinished_round_qcp']=m['qcp_used']-recorded_qcp
+        assert m['unfinished_round_qcp']>=0
+        if m['status']=='COMPLETE':assert m['unfinished_round_qcp']==0
+        errors=[json.loads(s) for s in (d/'error_events.jsonl').read_text().splitlines()] if (d/'error_events.jsonl').exists() else []
+        m['execution_protocol_errors']=sum('occurrence' in e and not e.get('sqlstate') for e in errors)
+        m['performance_metrics_valid']=m['status']=='COMPLETE' and not m['execution_protocol_errors']
         if m['status']=='COMPLETE':assert len(rows)==case['rounds'] and m['exact_restoration']
         events=[json.loads(s) for s in (d/'ddl_events.jsonl').read_text().splitlines()] if (d/'ddl_events.jsonl').exists() else []
         counts={'create':0,'drop':0};times={'create':0.,'drop':0.};pending=None
@@ -61,12 +67,14 @@ def summarize(out):
         m['ddl_attempt_counts']=counts;m['ddl_attempt_seconds']=times
         result.append(m)
     complete=[m for m in result if m['status']=='COMPLETE']
+    started=[m for m in result if m['status']!='NOT_STARTED']
     gates={
-        'mechanical_release_registration':registration.get('preflight',{}).get('status')=='PASS',
+        'registered_preflight':registration.get('preflight',{}).get('status')=='PASS',
         'nine_workloads_603_windows':len(complete)==9 and sum(m['rounds'] for m in complete)==603,
         'qcp_and_no_stranded_work':all(m.get('stranded_budget',0)==0 for m in result) and sum(m.get('qcp_used',0) for m in result)<=22271,
-        'exact_restoration':len(complete)==9 and all(m['exact_restoration'] for m in complete),
-        'single_frozen_version_and_stop':len(complete)==9 and len({m['revision'] for m in complete})==1 and registration['automatic_followup']=='STOP',
+        'restoration_for_started_runs':bool(started) and all(m.get('exact_restoration') for m in started),
+        'single_frozen_version_and_stop':bool(started) and len({m['revision'] for m in started})==1 and registration['automatic_followup']=='STOP',
+        'runtime_protocol':len(complete)==9 and all(m.get('performance_metrics_valid') for m in complete),
     }
     report=dict(status='CORE_V2_READY' if all(gates.values()) else 'CORE_V2_BLOCKED',gates=gates,
                 registration=registration,workloads=result,
@@ -84,11 +92,17 @@ def main():
            '| Workload | Rounds | Exec s | Inclusive rec s | Trans s | Total s | Wall s | QCP / cap | Changes | Full ADD | Deferred |',
            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     for m in report['workloads']:
-        if m['status']!='COMPLETE':lines.append(f"| {m['workload']} | {m['rounds']}/{m['expected_rounds']} ({m['status']}) | — | — | — | — | — | — | — | — | — |");continue
+        if m['status']!='COMPLETE':
+            qcp=f"{m['qcp_used']}/{m.get('qcp_cap','unknown')}" if 'qcp_used' in m else '—'
+            state='INVALID_EXECUTION' if m.get('execution_protocol_errors') else m['status']
+            lines.append(f"| {m['workload']} | {m['rounds']}/{m['expected_rounds']} ({state}) | — | — | — | — | — | {qcp} | — | — | — |")
+            continue
         values=[m['workload'],f"{m['rounds']}/{m['expected_rounds']}"]+[f"{m[k]:.3f}" for k in ['exec_s','rec_s','trans_s','total_s','wall_s']]+[f"{m['qcp_used']}/{m['qcp_cap']}"]+[str(m[k]) for k in ['changed','width2_full','deferred']]
         lines.append('| '+' | '.join(values)+' |')
     lines+=['','## Gates','']+[f"- {k}: {'PASS' if v else 'FAIL'}" for k,v in report['gates'].items()]
-    lines+=['','## Interpretation','',report['boundary_interpretation'],'',
+    lines+=['','## Interpretation','',
+            'Incomplete or execution-invalid rows are not valid release coverage or performance measurements. Paid QCP, including the unfinished round, remains charged; original artifacts are retained.',
+            '',report['boundary_interpretation'],'',
             'Optimizer EXPLAIN, scope-exclusive validation and other recommendation time, DDL build/drop attempts, resets/timeouts, full/approximate coverage, and each workload’s budget boundary counts are recorded in release_report.json. Inclusive recommendation includes setup, validation, safety and logging.','']
     (a.output/'RELEASE_REPORT.md').write_text('\n'.join(lines),encoding='utf-8')
     print(report['status'])

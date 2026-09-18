@@ -1,5 +1,7 @@
 # Core v2 validation before live registration
 
+**Outcome update:** The original 317-test revision `94c85db` failed live runtime wiring. The bounded campaign was stopped and restored; see `CORE_RELEASE_RESULT.md`. The corrective driver/reporting patch adds 13 tests (330 total locally passing), does not change Core policy or transport, and has not received another live run. The original pre-live results below remain historical evidence for that tested revision.
+
 These are new executions, not inherited historical scores.
 
 ## Local mechanical results

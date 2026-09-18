@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import signal
@@ -55,6 +56,28 @@ def schema(c):
 
 def same_snapshot(a,b):
     return all(a[k]==b[k] for k in ('database_environment','statistics_fingerprint','schema_fingerprint'))
+
+
+def execute_occurrence(connection,line,timeout_ms,meter):
+    """Original runtime SQL and penalty; programming/validation errors abort the run."""
+    statement='EXPLAIN (ANALYZE, FORMAT JSON) '+_safe_explain_query(sql_only(line))
+    meter.check()
+    timeout=min(timeout_ms,max(1,int((meter.deadline-time.monotonic())*1000)))
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT set_config(%s,%s,false)',('statement_timeout',str(timeout)))
+            cursor.execute(statement)
+            plan=cursor.fetchone()[0]
+    except Exception as exc:
+        sqlstate=getattr(exc,'pgcode',None)
+        if not isinstance(sqlstate,str) or len(sqlstate)!=5:
+            raise CampaignStop('EXECUTION_DRIVER_OR_CONNECTION_FAILURE:'+str(exc)) from exc
+        return 30000.,dict(error=str(exc),sqlstate=sqlstate)
+    if isinstance(plan,str):plan=json.loads(plan)
+    runtime=float(plan[0]['Plan']['Actual Total Time'])
+    if not math.isfinite(runtime) or runtime<0:
+        raise CampaignStop('INVALID_RUNTIME_OBSERVATION')
+    return runtime,None
 
 
 def reference_epoch(m,db):
@@ -129,16 +152,9 @@ def run_one(out,name,deadline):
         for i,window in enumerate(windows):
             r0=time.monotonic();meter.check();runtimes=[];errors=[];e0=time.monotonic()
             for j,line in enumerate(window):
-                meter.check()
-                try:
-                    with c.cursor() as cursor:
-                        timeout=min(case['query_timeout_ms'],max(1,int((meter.deadline-time.monotonic())*1000)))
-                        cursor.execute('SELECT set_config(%s,%s,false)',('statement_timeout',str(timeout)))
-                        cursor.execute(_safe_explain_query(sql_only(line),analyze=True));plan=cursor.fetchone()[0]
-                        if isinstance(plan,str):plan=json.loads(plan)
-                        rt=float(plan[0]['Plan']['Actual Total Time'])
-                except Exception as exc:
-                    rt=30000.;event=dict(window=i,occurrence=j,error=str(exc),sqlstate=getattr(exc,'pgcode',None))
+                rt,error=execute_occurrence(c,line,case['query_timeout_ms'],meter)
+                if error is not None:
+                    event=dict(window=i,occurrence=j,**error)
                     errors.append(event);append(d/'error_events.jsonl',event)
                 runtimes.append(rt)
             ew=time.monotonic()-e0;execution=sum(runtimes)/1000;exec_wall+=ew;exec_total+=execution
@@ -249,6 +265,8 @@ def campaign(out):
         status='COMPLETE'
     finally:
         receipt=read(out/'run_manifest.json')
+        recorded_runs=[read(p) for p in (out/'runs').glob('*/run_manifest.json')]
         receipt.update(status=status,completed_runs=len(completed),completed_rounds=sum(x['rounds'] for x in completed),
-                       wall_s=time.time()-start,qcp_used=sum(x['qcp_used'] for x in completed),automatic_followup='STOP')
+                       wall_s=time.time()-start,qcp_used=sum(x.get('qcp_used',0) for x in recorded_runs),
+                       qcp_counters_complete=all('qcp_used' in x for x in recorded_runs),automatic_followup='STOP')
         write_json(out/'run_manifest.json',receipt)
